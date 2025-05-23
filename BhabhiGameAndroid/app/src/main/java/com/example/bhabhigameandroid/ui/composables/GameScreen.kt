@@ -26,6 +26,8 @@ import com.example.bhabhigameandroid.Player
 import androidx.lifecycle.viewmodel.compose.viewModel // For viewModel()
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
+import androidx.compose.animation.core.* // For rememberInfiniteTransition, animateFloat, etc.
+import androidx.compose.ui.draw.scale // For Modifier.scale()
 
 // Helper function to determine player color
 @Composable
@@ -126,9 +128,26 @@ fun PlayerHandView(
             .padding(4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            val isMyTurnAndCanPlay = isCurrentPlayer && gameState == GameState.PLAYER_TURN && !player.hasLost
+
+            val avatarScale = if (isMyTurnAndCanPlay) {
+                val infiniteTransition = rememberInfiniteTransition(label = "avatarPulsingScale")
+                infiniteTransition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 1.15f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 700, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ), label = "avatarScaleFactor"
+                ).value
+            } else {
+                1f // Default scale
+            }
+
             Box(
                 modifier = Modifier
                     .size(24.dp)
+                    .scale(avatarScale) // Apply the animated scale
                     .background(
                         color = playerColor(playerIndex),
                         shape = CircleShape
@@ -198,49 +217,25 @@ fun GameScreen(
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Played Cards Area
-        if (gameState != GameState.INITIALIZING && gameState != GameState.DEALING) {
-            Text("Played Cards (Trick):", style = MaterialTheme.typography.h6)
-            if (currentPlayedCardsInfo.isEmpty()) {
-                Text("No cards played in current trick.", style = MaterialTheme.typography.caption)
-            } else {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth().height(100.dp), // Fixed height for played cards area
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    items(currentPlayedCardsInfo) { playedCardInfo ->
-                        PlayingCardView(cardInfo = playedCardInfo)
-                    }
+        // Game Table Area - Takes available space between message and buttons
+        Box(modifier = Modifier.weight(1f)) {
+            if (players.isNotEmpty() && gameState != GameState.INITIALIZING && gameState != GameState.DEALING) {
+                GameTable(
+                    gameEngine = gameEngine,
+                    selectedCard = selectedCard,
+                    onCardSelected = { card -> selectedCard = card }
+                )
+            } else if (gameState == GameState.INITIALIZING || gameState == GameState.DEALING) {
+                // Show a simple loading or dealing state on the table area
+                Box(modifier = Modifier.fillMaxSize().background(Color(0xFF006400)), contentAlignment = Alignment.Center) {
+                    Text(if(gameState == GameState.INITIALIZING) "Waiting for game to start..." else "Dealing cards...", style = MaterialTheme.typography.h6, color = Color.White)
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
         }
-
-
-        // Player Areas
-        if (players.isNotEmpty()) {
-            players.forEachIndexed { index, player ->
-                val isCurrentPlayer = index == currentPlayerIndex && !player.hasLost
-                val canPlay = isCurrentPlayer && (gameState == GameState.PLAYER_TURN ||
-                                                 (gameState == GameState.SHOOT_OUT_RESPONDING && player.id == gameEngine.shootOutRespondingPlayerId)
-                                                )
-
-                PlayerHandView(
-                    player = player,
-                    playerIndex = index, // Pass playerIndex
-                    isCurrentPlayer = isCurrentPlayer,
-                    gameState = gameState,
-                    canPlay = canPlay,
-                    selectedCard = selectedCard,
-                    onCardSelected = { card -> if(canPlay) selectedCard = card }
-                )
-                if (index < players.size -1) Divider() // Don't add divider after last player
-            }
-        }
-        Spacer(modifier = Modifier.weight(1f)) // Push buttons to bottom
+        // Spacer(modifier = Modifier.weight(1f)) // Removed, GameTable now fills space
 
         // Action Buttons
-        if (gameState != GameState.INITIALIZING) {
+        if (gameState != GameState.INITIALIZING && gameState != GameState.DEALING) { // Keep buttons hidden during init/deal
             val currentPlayer = players.getOrNull(currentPlayerIndex)
 
             if (gameState == GameState.PLAYER_TURN && currentPlayer != null && !currentPlayer.hasLost) {
