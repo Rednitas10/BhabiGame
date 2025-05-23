@@ -49,6 +49,10 @@ class GameEngine : ViewModel() {
     private val _gameMessage = MutableStateFlow("Welcome to Bhabhi!")
     val gameMessage: StateFlow<String> = _gameMessage.asStateFlow()
 
+    // For card collection animation: Pair of (List of cards to collect, collecting player's index)
+    private val _cardCollectionAnimationInfo = MutableStateFlow<Pair<List<PlayedCardInfo>, Int>?>(null)
+    val cardCollectionAnimationInfo: StateFlow<Pair<List<PlayedCardInfo>, Int>?> = _cardCollectionAnimationInfo.asStateFlow()
+
     var leadSuit: Suit? = null
     private var isFirstRound: Boolean = true
     private var originalStarterOfFirstRoundIndex: Int = 0
@@ -220,6 +224,7 @@ class GameEngine : ViewModel() {
         }
         _gameState.value = GameState.EVALUATING_ROUND
         if (_currentPlayedCardsInfo.value.isEmpty()) {
+            // No cards to evaluate, ensure correct next player or game state
             checkForBhabhi()
             if (_gameState.value == GameState.PLAYER_TURN) {
                 val playerWhoShouldLead = _players.value[_currentPlayerIndex.value]
@@ -231,7 +236,7 @@ class GameEngine : ViewModel() {
                         nextLeadPlayerIndex = (nextLeadPlayerIndex + 1) % _players.value.size
                         attempts++
                     }
-                     if (_players.value[nextLeadPlayerIndex].hand.isNotEmpty() && !_players.value[nextLeadPlayerIndex].hasLost) {
+                    if (_players.value[nextLeadPlayerIndex].hand.isNotEmpty() && !_players.value[nextLeadPlayerIndex].hasLost) {
                         _currentPlayerIndex.value = nextLeadPlayerIndex
                         _gameMessage.value += " ${_players.value[_currentPlayerIndex.value].name} (to the left) starts."
                         autoPlayBotIfNeeded()
@@ -240,61 +245,109 @@ class GameEngine : ViewModel() {
                     autoPlayBotIfNeeded() // Current leader might be a bot
                 }
             }
-            return
+            return // No cards were played, so nothing to collect or discard
         }
 
-        val playedCardsInfo = _currentPlayedCardsInfo.value.toList()
+        val playedCardsInfo = _currentPlayedCardsInfo.value.toList() // Crucial: copy for animation trigger
         val playedCards = playedCardsInfo.map { it.card }
         val outOfSuitCardPlayedInfo = playedCardsInfo.firstOrNull { it.card.suit != leadSuit && leadSuit != null }
 
-        if (outOfSuitCardPlayedInfo != null) {
-            if (isFirstRound) {
+        var pickerPlayerId: String? = null
+        var pickerPlayerIndex = -1
+
+        if (outOfSuitCardPlayedInfo != null) { // Someone played out of suit
+            if (isFirstRound) { // SR1
                 _gameMessage.value = "SR1: Out of suit in first round (${outOfSuitCardPlayedInfo.card.suit} by ${getPlayerById(outOfSuitCardPlayedInfo.playerId)?.name}). Cards go to discard pile."
-                _discardPile.update { it + playedCards }
-                _currentPlayerIndex.value = originalStarterOfFirstRoundIndex
-                _gameMessage.value += " ${_players.value[_currentPlayerIndex.value].name} leads again."
-                isFirstRound = false
-            } else {
-                val highestLeadSuitPlayedInfo = playedCardsInfo.filter { it.card.suit == leadSuit }
-                                                             .maxByOrNull { it.card.rank.value }
-                if (highestLeadSuitPlayedInfo != null) {
-                    val pickerPlayerId = highestLeadSuitPlayedInfo.playerId
-                    val picker = getPlayerById(pickerPlayerId)!!
-                    _gameMessage.value = "${picker.name} played highest of lead suit (${highestLeadSuitPlayedInfo.card.rank} of ${highestLeadSuitPlayedInfo.card.suit}) and picks up the pile due to out-of-suit play by ${getPlayerById(outOfSuitCardPlayedInfo.playerId)?.name}."
-                    val mutablePickerHand = picker.hand.toMutableList()
-                    mutablePickerHand.addAll(playedCards.map { it.copy(isPlayed = false) })
-                    updatePlayerHand(picker, mutablePickerHand)
-                    _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == pickerPlayerId }
-                } else { // Should only happen if no lead suit cards were played before breaking suit (e.g. first player breaks)
-                    _gameMessage.value = "No lead suit card played before ${getPlayerById(outOfSuitCardPlayedInfo.playerId)?.name} broke suit. ${getPlayerById(outOfSuitCardPlayedInfo.playerId)?.name} picks up."
-                    val pickerPlayerId = outOfSuitCardPlayedInfo.playerId
-                    val picker = getPlayerById(pickerPlayerId)!!
-                    val mutablePickerHand = picker.hand.toMutableList()
-                    mutablePickerHand.addAll(playedCards.map { it.copy(isPlayed = false) })
-                    updatePlayerHand(picker, mutablePickerHand)
-                    _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == pickerPlayerId }
+                // Animate cards to discard (conceptually, no specific animation to a pile yet)
+                _cardCollectionAnimationInfo.value = Pair(playedCardsInfo, -1) // -1 for discard pile
+                viewModelScope.launch {
+                    delay(500) // Animation duration
+                    _discardPile.update { it + playedCards }
+                    _currentPlayedCardsInfo.value = emptyList()
+                    _cardCollectionAnimationInfo.value = null
+                    _currentPlayerIndex.value = originalStarterOfFirstRoundIndex
+                    _gameMessage.value = "${_players.value[_currentPlayerIndex.value].name} leads again (SR1)."
+                    isFirstRound = false
+                    leadSuit = null
+                    checkForBhabhi()
+                    if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
                 }
+                return // Rest of logic handled in coroutine
+            } else { // Not first round, someone picks up
+                val highestLeadSuitPlayedInfo = playedCardsInfo.filter { it.card.suit == leadSuit }.maxByOrNull { it.card.rank.value }
+                pickerPlayerId = highestLeadSuitPlayedInfo?.playerId ?: outOfSuitCardPlayedInfo.playerId // Fallback to player who broke suit
+                pickerPlayerIndex = _players.value.indexOfFirst { it.id == pickerPlayerId }
             }
-        } else {
-            val highestCardInfo = playedCardsInfo.filter { it.card.suit == leadSuit }
-                                                 .maxByOrNull { it.card.rank.value }
+        } else { // All followed suit
+            val highestCardInfo = playedCardsInfo.filter { it.card.suit == leadSuit }.maxByOrNull { it.card.rank.value }
             if (highestCardInfo != null) {
                 val roundWinnerPlayerId = highestCardInfo.playerId
                 _gameMessage.value = "${getPlayerById(roundWinnerPlayerId)?.name} wins the trick with ${highestCardInfo.card.rank} of ${highestCardInfo.card.suit}."
-                _discardPile.update { it + playedCards }
-                _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == roundWinnerPlayerId }
+                // Cards go to discard pile
+                _cardCollectionAnimationInfo.value = Pair(playedCardsInfo, -1) // -1 for discard pile
+                viewModelScope.launch {
+                    delay(500) // Animation duration
+                    _discardPile.update { it + playedCards }
+                    _currentPlayedCardsInfo.value = emptyList()
+                    _cardCollectionAnimationInfo.value = null
+                    _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == roundWinnerPlayerId }
+                    isFirstRound = false // First round ends after first trick
+                    leadSuit = null
+                    checkForBhabhi()
+                    if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
+                }
+                return // Rest of logic handled in coroutine
             } else {
+                // Error or no cards of lead suit (should not happen if leadSuit is set and cards are played)
                 _gameMessage.value = "Error: No highest card. Discarding pile."
-                 _discardPile.update { it + playedCards }
-                 // Current player leads again as fallback
+                _discardPile.update { it + playedCards } // Safety clear
+                _currentPlayedCardsInfo.value = emptyList()
+                // Current player leads again as fallback
+                leadSuit = null
+                checkForBhabhi()
+                if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
+                return
             }
-            isFirstRound = false
         }
 
-        _currentPlayedCardsInfo.value = emptyList()
+        // This part is reached only if a player picks up cards (not SR1, not all-follow-suit-to-discard)
+        if (pickerPlayerId != null && pickerPlayerIndex != -1) {
+            val picker = getPlayerById(pickerPlayerId)!!
+             _gameMessage.value = "${picker.name} picks up the pile." // Message updated after animation
+            _cardCollectionAnimationInfo.value = Pair(playedCardsInfo, pickerPlayerIndex)
+
+            viewModelScope.launch {
+                delay(500) // Animation duration
+
+                val mutablePickerHand = picker.hand.toMutableList()
+                mutablePickerHand.addAll(playedCards.map { it.copy(isPlayed = false) })
+                updatePlayerHand(picker, mutablePickerHand)
+
+                _currentPlayedCardsInfo.value = emptyList()
+                _cardCollectionAnimationInfo.value = null
+                _currentPlayerIndex.value = pickerPlayerIndex
+                isFirstRound = false // If it somehow was still true
+                leadSuit = null
+                checkForBhabhi()
+                if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
+            }
+        } else {
+            // Fallback if picker somehow not determined, discard cards to prevent loop
+            _gameMessage.value = "Error: Could not determine card picker. Discarding cards."
+            _discardPile.update { it + playedCards }
+            _currentPlayedCardsInfo.value = emptyList()
+            leadSuit = null
+            checkForBhabhi()
+            if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
+        }
+    }
+
+    private fun proceedToNextTurnOrEndGame() {
+        // This function is effectively replaced by the logic at the end of the launched coroutines in evaluateRound
+        // and the direct calls to checkForBhabhi and autoPlayBotIfNeeded.
+        // Kept for conceptual reference if needed later.
         leadSuit = null
         checkForBhabhi()
-
         if (_gameState.value == GameState.PLAYER_TURN) {
             val leadingPlayer = _players.value[_currentPlayerIndex.value]
             if (leadingPlayer.hand.isEmpty() && !leadingPlayer.hasLost) {
