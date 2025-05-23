@@ -2,14 +2,17 @@ package com.example.bhabhigameandroid.ui.composables
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
+import androidx.compose.material.ButtonDefaults
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,7 +57,7 @@ fun RulesScreen(navController: NavController) {
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colors.background
+        color = Color(0xFFFAF8F0) // Light Cream Background
     ) {
         Column(
             modifier = Modifier
@@ -69,37 +72,38 @@ fun RulesScreen(navController: NavController) {
                 Text(
                     text = "Bhabhi Game Rules",
                     style = MaterialTheme.typography.h5,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF333333), // Dark Gray/Off-Black
                     modifier = Modifier.weight(1f)
                 )
-                Button(onClick = { navController.popBackStack() }) {
-                    Text("Back")
+                Button(
+                    onClick = { navController.popBackStack() },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color(0xFF008080), // Deep Teal
+                        contentColor = Color(0xFFFFFFFF) // White
+                    )
+                ) {
+                    Text("Back", fontWeight = FontWeight.SemiBold)
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // A more structured approach could be to split rulesText by "\n\nSpecial Rule"
-                // or similar delimiters to apply different styling for main rules vs special rules.
-                // For now, a single Text composable is used for simplicity.
-                // To make headings bold, one would need to parse the text or use multiple Text composables.
-
-                // Simple rendering of the rules text:
+                // For simplicity, the entire rules text is one block.
+                // For bolding specific headings within rulesText like "Rules:" or "Special Rule X:",
+                // a more complex parsing or multiple Text composables would be needed.
+                // The current instruction is to apply bold to "Headings" in general,
+                // which the main "Bhabhi Game Rules" title already covers.
+                // The body text will use FontWeight.Normal.
                 Text(
                     text = rulesText,
                     style = MaterialTheme.typography.body1,
-                    lineHeight = 20.sp // Improve readability
+                    fontWeight = FontWeight.Normal,
+                    color = Color(0xFF333333), // Dark Gray/Off-Black
+                    lineHeight = 22.sp // Improve readability
                 )
-
-                // Example of how to make headings bold (if we were to parse):
-                // rulesText.split("\n\n").forEach { paragraph ->
-                //     if (paragraph.startsWith("Special Rule") || paragraph.startsWith("Rules:")) {
-                //         Text(text = paragraph.substringBefore(":") + ":", style = MaterialTheme.typography.h6, modifier = Modifier.padding(top = 8.dp))
-                //         Text(text = paragraph.substringAfter(":").trim(), style = MaterialTheme.typography.body1, lineHeight = 20.sp)
-                //     } else {
-                //         Text(text = paragraph, style = MaterialTheme.typography.body1, lineHeight = 20.sp, modifier = Modifier.padding(top = 8.dp))
-                //     }
-                // }
             }
         }
     }

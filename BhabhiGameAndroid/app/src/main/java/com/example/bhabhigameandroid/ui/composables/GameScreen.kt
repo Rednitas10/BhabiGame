@@ -26,6 +26,7 @@ import com.example.bhabhigameandroid.Player
 import androidx.lifecycle.viewmodel.compose.viewModel // For viewModel()
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape // Ensure RoundedCornerShape is imported
 import androidx.compose.animation.core.* // For rememberInfiniteTransition, animateFloat, etc.
 import androidx.compose.ui.draw.scale // For Modifier.scale()
 
@@ -54,7 +55,7 @@ fun PlayingCardView(
     val displayCard = cardInfo?.card ?: card
     if (displayCard == null) {
         // Show a placeholder or an empty space if no card
-        Box(modifier = Modifier.padding(2.dp).width(60.dp).height(90.dp).background(Color.LightGray.copy(alpha = 0.2f)))
+        Box(modifier = Modifier.padding(2.dp).width(60.dp).height(90.dp).background(Color.LightGray.copy(alpha = 0.1f)))
         return
     }
 
@@ -73,9 +74,9 @@ fun PlayingCardView(
         else -> displayCard.rank.value.toString()
     }
 
-    val cardColor = if (displayCard.suit == com.example.bhabhigameandroid.Suit.HEARTS || displayCard.suit == com.example.bhabhigameandroid.Suit.DIAMONDS) Color.Red else Color.Black
-    val border = if (isSelected) BorderStroke(3.dp, Color.Blue) else BorderStroke(1.dp, Color.Gray)
-    val elevation = if (isSelected) 4.dp else 2.dp
+    val cardColor = if (displayCard.suit == com.example.bhabhigameandroid.Suit.HEARTS || displayCard.suit == com.example.bhabhigameandroid.Suit.DIAMONDS) Color(0xFFD32F2F) else Color(0xFF212121) // Red or Black for suits
+    val border = if (isSelected) BorderStroke(2.5.dp, Color(0xFF008080)) else BorderStroke(1.5.dp, Color(0xFF4682B4)) // Deep Teal (Selected) or Calm Blue (Normal)
+    val elevation = if (isSelected) 8.dp else 4.dp
 
     Card(
         modifier = Modifier
@@ -83,20 +84,32 @@ fun PlayingCardView(
             .width(60.dp)
             .height(90.dp)
             .then(if (isClickable) Modifier.clickable(onClick = onCardClick) else Modifier),
+        shape = RoundedCornerShape(6.dp),
+        backgroundColor = Color(0xFFFAF8F0), // Light Cream
         border = border,
         elevation = elevation
     ) {
         Column(
-            modifier = Modifier.padding(4.dp).fillMaxSize(),
+            modifier = Modifier.padding(6.dp).fillMaxSize(), // Updated padding
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(text = rankSymbol, fontSize = 20.sp, color = cardColor, fontWeight = FontWeight.Bold)
-            Text(text = suitSymbol, fontSize = 18.sp, color = cardColor)
+            Text(
+                text = rankSymbol,
+                fontSize = 22.sp, // Updated fontSize
+                fontWeight = FontWeight.Bold, // Updated fontWeight
+                color = cardColor // Rank text color same as suit
+            )
+            Text(
+                text = suitSymbol,
+                fontSize = 20.sp, // Updated fontSize
+                color = cardColor // Suit symbol color same as suit
+            )
             if (cardInfo != null) {
                  Text(
-                    text = getPlayerById(gameEngine = null, playerId = cardInfo.playerId, playersState = null)?.name?.take(3) ?: "P?", // Placeholder for player name
-                    fontSize = 8.sp,
+                    text = getPlayerById(gameEngine = null, playerId = cardInfo.playerId, playersState = null)?.name?.take(3) ?: "P?",
+                    fontSize = 10.sp, // Updated fontSize
+                    color = Color(0xFF333333), // Dark Gray/Off-Black for player abbreviation
                     modifier = Modifier.align(Alignment.Start)
                 )
             }
@@ -124,7 +137,7 @@ fun PlayerHandView(
     Column(
         modifier = Modifier
             .padding(vertical = 4.dp, horizontal = 2.dp)
-            .background(if (isCurrentPlayer && gameState != GameState.GAME_OVER && !player.hasLost) Color.LightGray.copy(alpha = 0.3f) else Color.Transparent)
+            .background(if (isCurrentPlayer && gameState != GameState.GAME_OVER && !player.hasLost) Color(0xFF008080).copy(alpha = 0.1f) else Color.Transparent) // Updated background
             .padding(4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -149,16 +162,18 @@ fun PlayerHandView(
                     .size(24.dp)
                     .scale(avatarScale) // Apply the animated scale
                     .background(
-                        color = playerColor(playerIndex),
+                        color = playerColor(playerIndex), // Unchanged
                         shape = CircleShape
                     )
-                    .border(1.dp, Color.Black.copy(alpha = 0.5f), CircleShape)
+                    .border(1.dp, Color(0xFF333333).copy(alpha = 0.5f), CircleShape) // Updated border color
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "${player.name} (${player.hand.size}) ${if (player.isBhabhi) " - BHABHI" else if (player.hasLost) " - LOST" else ""}",
-                fontWeight = if (isCurrentPlayer && !player.hasLost) FontWeight.Bold else FontWeight.Normal,
-                color = if (player.isBhabhi) Color.Red else if (player.hasLost) Color.DarkGray else Color.Black,
+                fontWeight = if (player.isBhabhi) FontWeight.Bold else if (isCurrentPlayer && !player.hasLost) FontWeight.Bold else FontWeight.Normal, // BHABHI is always bold
+                color = if (player.isBhabhi) Color(0xFFD32F2F) // Red for BHABHI
+                        else if (player.hasLost) Color(0xFF757575) // Muted Gray for LOST
+                        else Color(0xFF333333), // Dark Gray/Off-Black for Player Name
                 style = MaterialTheme.typography.subtitle1
             )
         }
@@ -213,7 +228,7 @@ fun GameScreen(
             text = gameMessage,
             modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth(),
             style = MaterialTheme.typography.subtitle1,
-            color = if (gameMessage.contains("Error", ignoreCase = true) || gameMessage.contains("Bhabhi", ignoreCase = true)) Color.Red else MaterialTheme.colors.onSurface
+            color = if (gameMessage.contains("Error", ignoreCase = true) || gameMessage.contains("Bhabhi", ignoreCase = true)) Color(0xFFD32F2F) else Color(0xFF333333)
         )
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -247,17 +262,31 @@ fun GameScreen(
                         }
                     },
                     enabled = selectedCard != null,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color(0xFF008080),
+                        contentColor = Color(0xFFFFFFFF),
+                        disabledBackgroundColor = Color(0xFFD3D3D3),
+                        disabledContentColor = Color(0xFFA9A9A9)
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) {
-                    Text("Play Selected Card")
+                    Text("Play Selected Card", fontWeight = FontWeight.SemiBold)
                 }
                 // SR2 Button
                 Button(
                     onClick = { gameEngine.attemptTakeHandFromLeft(currentPlayerIndex) },
                     enabled = currentPlayedCardsInfo.isEmpty(), // Can only take if trick pile is empty
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color(0xFF008080),
+                        contentColor = Color(0xFFFFFFFF),
+                        disabledBackgroundColor = Color(0xFFD3D3D3),
+                        disabledContentColor = Color(0xFFA9A9A9)
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) {
-                    Text("SR2: Take Hand From Left")
+                    Text("SR2: Take Hand From Left", fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -265,8 +294,13 @@ fun GameScreen(
             if (gameState == GameState.SHOOT_OUT_DRAWING && currentPlayer?.id == gameEngine.shootOutDrawingPlayerId) {
                 Button(
                     onClick = { gameEngine.shootOutDrawCard(currentPlayer.id) },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                ) { Text("SR4B: Draw Card for Shoot-Out") }
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color(0xFF008080),
+                        contentColor = Color(0xFFFFFFFF)
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) { Text("SR4B: Draw Card for Shoot-Out", fontWeight = FontWeight.SemiBold) }
             }
             if (gameState == GameState.SHOOT_OUT_RESPONDING && currentPlayer?.id == gameEngine.shootOutRespondingPlayerId) {
                  Button(
@@ -277,8 +311,15 @@ fun GameScreen(
                         }
                     },
                     enabled = selectedCard != null,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                ) { Text("SR4B: Respond with Selected Card") }
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color(0xFF008080),
+                        contentColor = Color(0xFFFFFFFF),
+                        disabledBackgroundColor = Color(0xFFD3D3D3),
+                        disabledContentColor = Color(0xFFA9A9A9)
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                ) { Text("SR4B: Respond with Selected Card", fontWeight = FontWeight.SemiBold) }
             }
 
 
@@ -288,17 +329,27 @@ fun GameScreen(
                         selectedCard = null
                         gameEngine.setupGame(playerNamesState.toList()) // Restart with same default names
                     },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color(0xFF008080),
+                        contentColor = Color(0xFFFFFFFF)
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) {
-                    Text("Restart Game")
+                    Text("Restart Game", fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = {
                         navController.popBackStack("main_menu", inclusive = false)
                     },
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color(0xFF008080),
+                        contentColor = Color(0xFFFFFFFF)
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) {
-                    Text("Back to Main Menu")
+                    Text("Back to Main Menu", fontWeight = FontWeight.SemiBold)
                 }
             }
         }

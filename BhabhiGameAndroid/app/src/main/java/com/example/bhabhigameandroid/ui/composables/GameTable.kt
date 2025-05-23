@@ -35,7 +35,7 @@ private fun PlayedCardsDisplay(
     val cardCollectionAnimInfo by gameEngine.cardCollectionAnimationInfo.collectAsState()
 
     if (playedCardsInfo.isEmpty() && cardCollectionAnimInfo == null) { // Also check if collection anim is done
-        Text("No cards in trick", color = Color.White.copy(alpha = 0.7f))
+        Text("No cards in trick", color = Color(0xFFFAF8F0).copy(alpha = 0.8f))
     } else {
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
@@ -151,7 +151,7 @@ private fun PlayerZone(
     Box(
         modifier = modifier
             .padding(4.dp)
-            .background(Color.Black.copy(alpha = 0.1f)) // Slight shade for player zone
+            // Background modifier removed
     ) {
         PlayerHandView(
             player = player,
@@ -179,7 +179,7 @@ fun GameTable(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF006400)) // Dark Green table
+            .background(Color(0xFF3A6B35)) // Muted Green table
     ) {
         // Central Play Area
         Box(
@@ -187,7 +187,7 @@ fun GameTable(
                 .align(Alignment.Center)
                 .fillMaxWidth(0.8f) // Takes 80% of width
                 .aspectRatio(2f / 1f) // Maintain a certain aspect ratio
-                .background(Color.Black.copy(alpha = 0.2f)) // Semi-transparent darker area
+                .background(Color(0xFF2F5D2F)) // Darker Muted Green
                 .padding(8.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -250,7 +250,7 @@ fun GameTable(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(16.dp)
-                .background(Color.DarkGray.copy(alpha = 0.3f))
+                .background(Color(0xFF2F5D2F)) // Darker Muted Green
                 .size(60.dp, 90.dp) // Approx card size
         ) {
             // Could display deck size or a card back if needed
