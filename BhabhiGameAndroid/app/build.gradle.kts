@@ -41,6 +41,7 @@ dependencies {
     implementation("androidx.compose.material:material:1.3.1") // Or latest stable
     implementation("androidx.compose.ui:ui-tooling-preview:1.3.3") // Or latest stable
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2") // Added for viewModelScope if GameEngine uses it
+    implementation("androidx.navigation:navigation-compose:2.5.3") // For Jetpack Navigation Compose
 
     // Test dependencies
     testImplementation("junit:junit:4.13.2")
