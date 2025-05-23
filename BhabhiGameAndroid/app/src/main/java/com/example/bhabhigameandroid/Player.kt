@@ -19,7 +19,10 @@ data class Player(
 
     // hasLost: Boolean = false (alternative to isBhabhi, or can be used to mark players
     // who are out but not necessarily the Bhabhi yet)
-    var hasLost: Boolean = false
+    var hasLost: Boolean = false,
+
+    // Add isBot property
+    val isBot: Boolean = false
 ) {
     // Optional: Add methods for player actions if needed later,
     // e.g., playCard, drawCard (though drawing is usually from deck or pile)

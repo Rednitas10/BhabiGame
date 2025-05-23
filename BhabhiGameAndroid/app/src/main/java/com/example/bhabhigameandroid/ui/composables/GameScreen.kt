@@ -23,6 +23,23 @@ import com.example.bhabhigameandroid.GameEngine
 import com.example.bhabhigameandroid.GameState
 import com.example.bhabhigameandroid.PlayedCardInfo
 import com.example.bhabhigameandroid.Player
+import androidx.lifecycle.viewmodel.compose.viewModel // For viewModel()
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.border
+
+// Helper function to determine player color
+@Composable
+fun playerColor(playerIndex: Int): Color {
+    val colors = listOf(
+        Color(0xFFE91E63), // Pink
+        Color(0xFF2196F3), // Blue
+        Color(0xFF4CAF50), // Green
+        Color(0xFFFFC107), // Amber
+        Color(0xFF9C27B0), // Purple
+        Color(0xFF00BCD4)  // Cyan
+    )
+    return colors[playerIndex % colors.size]
+}
 
 @Composable
 fun PlayingCardView(
@@ -95,6 +112,7 @@ fun getPlayerById(gameEngine: GameEngine?, playerId: String, playersState: List<
 @Composable
 fun PlayerHandView(
     player: Player,
+    playerIndex: Int, // Added playerIndex for avatar color
     isCurrentPlayer: Boolean,
     gameState: GameState,
     canPlay: Boolean, // Derived from isCurrentPlayer and gameState
@@ -103,18 +121,31 @@ fun PlayerHandView(
 ) {
     Column(
         modifier = Modifier
-            .padding(4.dp)
-            .background(if (isCurrentPlayer && gameState != GameState.GAME_OVER) Color.LightGray.copy(alpha = 0.3f) else Color.Transparent)
+            .padding(vertical = 4.dp, horizontal = 2.dp)
+            .background(if (isCurrentPlayer && gameState != GameState.GAME_OVER && !player.hasLost) Color.LightGray.copy(alpha = 0.3f) else Color.Transparent)
             .padding(4.dp)
     ) {
-        Text(
-            text = "${player.name} (${player.hand.size}) ${if (player.isBhabhi) " - BHABHI" else if (player.hasLost) " - LOST" else ""}",
-            fontWeight = if (isCurrentPlayer) FontWeight.Bold else FontWeight.Normal,
-            color = if (player.isBhabhi) Color.Red else if (player.hasLost) Color.Gray else Color.Black
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .background(
+                        color = playerColor(playerIndex),
+                        shape = CircleShape
+                    )
+                    .border(1.dp, Color.Black.copy(alpha = 0.5f), CircleShape)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "${player.name} (${player.hand.size}) ${if (player.isBhabhi) " - BHABHI" else if (player.hasLost) " - LOST" else ""}",
+                fontWeight = if (isCurrentPlayer && !player.hasLost) FontWeight.Bold else FontWeight.Normal,
+                color = if (player.isBhabhi) Color.Red else if (player.hasLost) Color.DarkGray else Color.Black,
+                style = MaterialTheme.typography.subtitle1
+            )
+        }
         Spacer(modifier = Modifier.height(4.dp))
         LazyRow(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(start = 32.dp), // Indent cards to align under text
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             items(player.hand.sorted()) { card -> // Keep hand sorted for consistent display
@@ -130,7 +161,10 @@ fun PlayerHandView(
 }
 
 @Composable
-fun GameScreen(gameEngine: GameEngine) {
+fun GameScreen(
+    navController: androidx.navigation.NavController, // Added for potential navigation from GameScreen
+    gameEngine: GameEngine = viewModel() // GameScreen now gets its own GameEngine instance
+) {
     val players by gameEngine.players.collectAsState()
     val currentPlayerIndex by gameEngine.currentPlayerIndex.collectAsState()
     val currentPlayedCardsInfo by gameEngine.currentPlayedCardsInfo.collectAsState()
@@ -139,8 +173,14 @@ fun GameScreen(gameEngine: GameEngine) {
 
     var selectedCard by remember { mutableStateOf<Card?>(null) }
     // For player name input in INITIALIZING state
-    val playerNamesState = remember { mutableStateListOf("Player 1", "Player 2", "Player 3") } // Default for 3 players
+    val playerNamesState = remember { mutableStateListOf("You", "Bot Alice", "Bot Bob") } // Default for "Play vs Bots"
 
+    // Setup game when screen is first composed after navigation
+    LaunchedEffect(Unit) {
+        if (players.isEmpty() || gameState == GameState.INITIALIZING) { // Only setup if not already set up (e.g. after config change)
+            gameEngine.setupGame(playerNamesState.toList())
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -149,31 +189,6 @@ fun GameScreen(gameEngine: GameEngine) {
             .verticalScroll(rememberScrollState()), // Make screen scrollable for smaller devices
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Game Setup UI
-        if (gameState == GameState.INITIALIZING || players.isEmpty()) {
-            Text("Setup New Game", style = MaterialTheme.typography.h5)
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Simplified player name input (fixed 3 players for now)
-            playerNamesState.forEachIndexed { index, name ->
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { playerNamesState[index] = it },
-                    label = { Text("Player ${index + 1} Name") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(onClick = {
-                if (playerNamesState.all { it.isNotBlank() }) {
-                    gameEngine.setupGame(playerNamesState.toList())
-                }
-            }) {
-                Text("Start Game with ${playerNamesState.size} Players")
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
         // Game Message Area
         Text(
             text = gameMessage,
@@ -212,13 +227,14 @@ fun GameScreen(gameEngine: GameEngine) {
 
                 PlayerHandView(
                     player = player,
+                    playerIndex = index, // Pass playerIndex
                     isCurrentPlayer = isCurrentPlayer,
                     gameState = gameState,
                     canPlay = canPlay,
                     selectedCard = selectedCard,
                     onCardSelected = { card -> if(canPlay) selectedCard = card }
                 )
-                Divider()
+                if (index < players.size -1) Divider() // Don't add divider after last player
             }
         }
         Spacer(modifier = Modifier.weight(1f)) // Push buttons to bottom
@@ -275,13 +291,19 @@ fun GameScreen(gameEngine: GameEngine) {
                 Button(
                     onClick = {
                         selectedCard = null
-                        // gameEngine.resetGame() // Use existing players for restart
-                        // For new players, set to INITIALIZING
-                        gameEngine.setupGame(playerNamesState.toList()) // Restart with same names for simplicity now
+                        gameEngine.setupGame(playerNamesState.toList()) // Restart with same default names
                     },
                     modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
                 ) {
-                    Text("Start New Game")
+                    Text("Restart Game")
+                }
+                Button(
+                    onClick = {
+                        navController.popBackStack("main_menu", inclusive = false)
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                ) {
+                    Text("Back to Main Menu")
                 }
             }
         }
