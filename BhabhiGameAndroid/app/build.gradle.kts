@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     kotlin("android")
+    id("com.google.gms.google-services") version "4.4.1" apply false // Added Google Play services plugin
 }
 
 android {
@@ -43,6 +44,15 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.2") 
     implementation("androidx.navigation:navigation-compose:2.7.5") // Updated to a more recent stable version
 
+    // Firebase
+    implementation(platform("com.google.firebase:firebase-bom:32.8.0")) // Firebase BoM
+    implementation("com.google.firebase:firebase-auth-ktx")
+    implementation("com.google.firebase:firebase-firestore-ktx")
+    implementation("com.google.firebase:firebase-functions-ktx") // For Firebase Cloud Functions
+    implementation("com.google.firebase:firebase-database-ktx") // For Realtime Database (connection state)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3") // For Firebase tasks with coroutines
+
+
     // Test dependencies
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3") // Updated to a more recent stable version
@@ -51,3 +61,6 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.5.4")
     debugImplementation("androidx.compose.ui:ui-tooling:1.5.4")
 }
+
+// Apply the Google services plugin at the bottom
+apply(plugin = "com.google.gms.google-services")
