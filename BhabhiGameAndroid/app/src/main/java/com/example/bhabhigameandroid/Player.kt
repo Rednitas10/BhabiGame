@@ -4,9 +4,11 @@ import java.util.UUID
 
 // Define a data class Player
 data class Player(
-    // Add properties:
-    // id: String (e.g., UUID.randomUUID().toString())
+    // id: String (e.g., UUID.randomUUID().toString()) - Kept for now for local game compatibility
     val id: String = UUID.randomUUID().toString(),
+
+    // uid: String - Firebase User ID, primary identifier for network play
+    val uid: String = id, // Defaults to id if not specified, useful for local/bot players
 
     // name: String
     val name: String,
@@ -22,7 +24,10 @@ data class Player(
     var hasLost: Boolean = false,
 
     // Add isBot property
-    val isBot: Boolean = false
+    val isBot: Boolean = false,
+
+    // isLocal: Boolean = false - Indicates if this player is the local user
+    val isLocal: Boolean = false
 ) {
     // Optional: Add methods for player actions if needed later,
     // e.g., playCard, drawCard (though drawing is usually from deck or pile)

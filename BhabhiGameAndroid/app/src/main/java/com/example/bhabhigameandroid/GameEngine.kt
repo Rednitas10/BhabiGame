@@ -25,48 +25,156 @@ enum class GameState {
 // Data class to hold a card and the ID of the player who played it
 data class PlayedCardInfo(val card: Card, val playerId: String)
 
+import android.util.Log
+
 class GameEngine : ViewModel() {
 
-    // Properties using StateFlow for UI updates
+    // Core State - now private MutableStateFlows, exposed as StateFlows
     private val _players = MutableStateFlow<List<Player>>(emptyList())
     val players: StateFlow<List<Player>> = _players.asStateFlow()
 
+    // _deck is mostly conceptual for network play, server handles deck and dealing.
+    // Kept for potential local-only mode or if client needs to display deck related info.
     private val _deck = MutableStateFlow(Deck())
-    val deck: StateFlow<Deck> = _deck.asStateFlow()
+    val deck: StateFlow<Deck>> = _deck.asStateFlow()
 
-    private val _currentPlayerIndex = MutableStateFlow(0) // General current player
+    private val _currentPlayerIndex = MutableStateFlow(0)
     val currentPlayerIndex: StateFlow<Int> = _currentPlayerIndex.asStateFlow()
 
     private val _currentPlayedCardsInfo = MutableStateFlow<List<PlayedCardInfo>>(emptyList())
     val currentPlayedCardsInfo: StateFlow<List<PlayedCardInfo>> = _currentPlayedCardsInfo.asStateFlow()
 
-    private val _discardPile = MutableStateFlow<List<Card>>(emptyList())
+    private val _discardPile = MutableStateFlow<List<Card>>(emptyList()) // Server might manage this fully
     val discardPile: StateFlow<List<Card>> = _discardPile.asStateFlow()
 
-    private val _gameState = MutableStateFlow(GameState.INITIALIZING)
+    private val _gameState = MutableStateFlow(GameState.INITIALIZING) // Enum GameState
     val gameState: StateFlow<GameState> = _gameState.asStateFlow()
 
-    private val _gameMessage = MutableStateFlow("Welcome to Bhabhi!")
+    private val _gameMessage = MutableStateFlow("Waiting for game to start...")
     val gameMessage: StateFlow<String> = _gameMessage.asStateFlow()
 
+    private val _selectedCard = MutableStateFlow<Card?>(null)
+    val selectedCard: StateFlow<Card?> = _selectedCard.asStateFlow()
+
     // For card collection animation: Pair of (List of cards to collect, collecting player's index)
+    // This might need adaptation if server directly tells who collected what.
     private val _cardCollectionAnimationInfo = MutableStateFlow<Pair<List<PlayedCardInfo>, Int>?>(null)
     val cardCollectionAnimationInfo: StateFlow<Pair<List<PlayedCardInfo>, Int>?> = _cardCollectionAnimationInfo.asStateFlow()
 
-    var leadSuit: Suit? = null
-    private var isFirstRound: Boolean = true
-    private var originalStarterOfFirstRoundIndex: Int = 0
 
-    // Shoot-Out specific state
-    var shootOutDrawingPlayerId: String? = null // Made public for UI check
-    var shootOutRespondingPlayerId: String? = null // Made public for UI check
-    private var shootOutDrawnCard: Card? = null
+    // Public StateFlows for other potentially relevant states (add as needed)
+    // Example: If leadSuit, Bhabhi status, or ShootOut details are needed by UI directly from GameEngine
+    // For now, these are private or managed internally, updated via initializeOrUpdateFromNetwork.
+    // If direct UI observation of these from GameEngine (rather than ViewModel constructing them) is desired, expose them.
+    // private val _leadSuit = MutableStateFlow<Suit?>(null)
+    // val leadSuit: StateFlow<Suit?> = _leadSuit.asStateFlow()
+    // Exposing shoot-out details for UI
+    private val _isBhabhiPlayerId = MutableStateFlow<String?>(null)
+    val isBhabhiPlayerId: StateFlow<String?> = _isBhabhiPlayerId.asStateFlow()
+
+    private val _shootOutCardToBeat = MutableStateFlow<Card?>(null) // Conceptual: actual card server expects to be beaten
+    val shootOutCardToBeat: StateFlow<Card?> = _shootOutCardToBeat.asStateFlow()
+
+
+    // Network play specific properties
+    private var localPlayerId: String? = null
+    var firebaseService: FirebaseService? = null // Made public
+    private var currentRoomId: String? = null // Added currentRoomId
+
+    // Local game logic variables (may become server-driven or less relevant)
+    var leadSuit: Suit? = null // Will be derived from networkState.currentPlayedCards or specific event
+    private var isFirstRound: Boolean = true // Server will manage this logic
+    private var originalStarterOfFirstRoundIndex: Int = 0 // Server will manage this
+
+    // Shoot-Out specific state (will be derived from networkState)
+    private var _shootOutDrawingPlayerId: String? = null
+    val shootOutDrawingPlayerId: String? get() = _shootOutDrawingPlayerId // Public getter if UI needs it
+
+    private var _shootOutRespondingPlayerId: String? = null
+    val shootOutRespondingPlayerId: String? get() = _shootOutRespondingPlayerId // Public getter
+
+    private var _shootOutDrawnCard: Card? = null // This might be part of GameStateData or a specific event
+    val shootOutDrawnCard: Card? get() = _shootOutDrawnCard
 
 
     init {
-        _deck.value = Deck()
+        // _deck.value = Deck() // Initializing deck might be server's job
+        Log.d("GameEngine", "GameEngine Initialized for Network Play")
     }
 
+    // New method to update local state from network
+    fun initializeOrUpdateFromNetwork(networkState: GameStateData, currentLocalPlayerId: String, roomId: String) {
+        localPlayerId = currentLocalPlayerId
+        this.currentRoomId = roomId // Set currentRoomId
+        Log.d("GameEngine", "Initializing from Network. Local Player ID: $localPlayerId, Room ID: $roomId")
+
+
+        // Update players
+        val newPlayers = networkState.playerTurnOrder.mapNotNull { playerUID ->
+            val hand = networkState.playerHands[playerUID]?.map { it.toDomainCard() } ?: emptyList()
+            val displayName = networkState.playerDisplayNames[playerUID] ?: "Player $playerUID"
+            Player(
+                id = playerUID, // Using UID as the primary ID now for Player objects
+                uid = playerUID,
+                name = displayName,
+                hand = hand.toMutableList(),
+                isLocal = (playerUID == localPlayerId),
+                isBot = false, // Assuming no bots in network state for now, or server flags them
+                hasLost = networkState.isBhabhiPlayerId == playerUID || (networkState.playersWhoLost.contains(playerUID)),
+                isBhabhi = networkState.isBhabhiPlayerId == playerUID
+            )
+        }
+        _players.value = newPlayers
+
+        // Update current player index
+        val currentNetworkPlayerId = networkState.playerTurnOrder.getOrNull(networkState.currentPlayerIndex)
+        _currentPlayerIndex.value = newPlayers.indexOfFirst { it.uid == currentNetworkPlayerId }.coerceAtLeast(0)
+
+
+        // Update current played cards
+        _currentPlayedCardsInfo.value = networkState.currentPlayedCards.map { it.toDomainPlayedCardInfo() }
+
+        // Update game message
+        _gameMessage.value = networkState.gameMessage
+
+        // Update game state enum
+        try {
+            _gameState.value = GameState.valueOf(networkState.gameStatus.uppercase())
+        } catch (e: IllegalArgumentException) {
+            Log.e("GameEngine", "Received unknown game status from network: ${networkState.gameStatus}")
+            _gameState.value = GameState.INITIALIZING // Fallback state
+        }
+
+        // Update discard pile (if available and relevant for client)
+        _discardPile.value = networkState.discardPile.map { it.toDomainCard() }
+
+        _isBhabhiPlayerId.value = networkState.isBhabhiPlayerId
+        // Conceptual: If server provides the card to beat in shoot-out directly
+        // _shootOutCardToBeat.value = networkState.shootOutCardToBeat?.toDomainCard()
+
+        // Update lead suit based on current played cards (if any)
+        leadSuit = _currentPlayedCardsInfo.value.firstOrNull()?.card?.suit
+
+        Log.d("GameEngine", "State updated. Players: ${newPlayers.map { it.name + "("+it.hand.size+")" } }. Current Player: ${newPlayers.getOrNull(_currentPlayerIndex.value)?.name}. Status: ${_gameState.value}")
+    }
+
+    fun selectCard(card: Card) {
+        // Allow selecting card even if it's not strictly "your turn" yet,
+        // as player might be pre-selecting. Actual play validation is in playCard.
+        if (_players.value.find { it.isLocal }?.hand?.contains(card) == true) {
+            _selectedCard.value = card
+        } else {
+            Log.w("GameEngine", "selectCard: Card $card not in local player's hand.")
+        }
+    }
+
+    fun deselectCard() {
+        _selectedCard.value = null
+    }
+
+
+    // Old setupGame - comment out or adapt for local-only mode
+    /*
     fun setupGame(playerNames: List<String>) {
         if (playerNames.size < 2) {
             _gameMessage.value = "Cannot start game with less than 2 players."
@@ -76,7 +184,7 @@ class GameEngine : ViewModel() {
         _gameMessage.value = "Setting up new game with ${playerNames.joinToString()}..."
         // Player at index 0 is human, others are bots (e.g., for 3 players: P0=Human, P1=Bot, P2=Bot)
         val newPlayers = playerNames.mapIndexed { index, name ->
-            Player(name = name, isBot = index > 0)
+            Player(name = name, isBot = index > 0, isLocal = index == 0) // Assuming player 0 is local for local games
         }
         _players.value = newPlayers
         _deck.value = Deck()
@@ -86,13 +194,12 @@ class GameEngine : ViewModel() {
         _discardPile.value = emptyList()
         leadSuit = null
         isFirstRound = true
-        shootOutDrawingPlayerId = null
-        shootOutRespondingPlayerId = null
-        shootOutDrawnCard = null
-
+        _shootOutDrawingPlayerId = null
+        _shootOutRespondingPlayerId = null
+        _shootOutDrawnCard = null
 
         _gameState.value = GameState.DEALING
-        dealCards()
+        dealCards() // This would also need to be local-only
 
         var startingPlayerFound = false
         for ((index, player) in _players.value.withIndex()) {
@@ -112,9 +219,12 @@ class GameEngine : ViewModel() {
             _gameMessage.value = "${_players.value[_currentPlayerIndex.value].name} has the Ace of Spades and starts the game."
         }
         _gameState.value = GameState.PLAYER_TURN
-        autoPlayBotIfNeeded() // Check if bot starts
+        // autoPlayBotIfNeeded() // Bot logic might be server-side or different for local
     }
+    */
 
+    // Old dealCards - Keep for local mode or remove if server handles all dealing
+    /*
     private fun dealCards() {
         val currentPlayers = _players.value.toMutableList()
         if (currentPlayers.isEmpty()) return
@@ -128,527 +238,291 @@ class GameEngine : ViewModel() {
         _players.value = currentPlayers
         _gameMessage.value = "Cards have been dealt."
     }
+    */
 
     fun playCard(playerIndex: Int, card: Card) {
-        if (_gameState.value != GameState.PLAYER_TURN) {
-            _gameMessage.value = "Cannot play card now. State: ${_gameState.value}"
-            return
-        }
-        if (playerIndex != _currentPlayerIndex.value) {
-            _gameMessage.value = "It's not ${_players.value.getOrNull(playerIndex)?.name ?: "that player"}'s turn!"
-            return
-        }
-
-        val player = _players.value[playerIndex]
-        if (!player.hand.contains(card)) {
-            _gameMessage.value = "${player.name} does not have ${card.rank} of ${card.suit}!"
+        val player = _players.value.getOrNull(playerIndex)
+        if (player == null) {
+            _gameMessage.value = "Invalid player index for playCard."
+            Log.w("GameEngine", "playCard: Invalid player index $playerIndex")
             return
         }
 
-        if (_currentPlayedCardsInfo.value.isEmpty()) {
-            leadSuit = card.suit
-            _gameMessage.value = "${player.name} played ${card.rank} of ${card.suit}. Lead suit is $leadSuit."
-        } else {
-            if (card.suit != leadSuit) {
-                if (player.hand.any { it.suit == leadSuit }) {
-                    _gameMessage.value = "${player.name}, you must play $leadSuit if you have it."
-                    return
-                }
-                _gameMessage.value = "${player.name} played ${card.rank} of ${card.suit} (out of suit)."
-            } else {
-                _gameMessage.value = "${player.name} played ${card.rank} of ${card.suit}."
-            }
-        }
-
-        val mutableHand = player.hand.toMutableList()
-        mutableHand.remove(card)
-        updatePlayerHand(player, mutableHand)
-
-        _currentPlayedCardsInfo.update { it + PlayedCardInfo(card.copy(isPlayed = true), player.id) }
-
-        if (mutableHand.isEmpty()) {
-            _gameMessage.value = "${player.name} has played all their cards!"
-        }
-        determineNextPlayerOrEvaluate()
-    }
-
-    private fun determineNextPlayerOrEvaluate() {
-        val activePlayersStillInGame = _players.value.filterNot { it.hasLost }
-        val playersWithCards = activePlayersStillInGame.filter { it.hand.isNotEmpty() }
-
-        val playerWhoJustPlayedId = _currentPlayedCardsInfo.value.lastOrNull()?.playerId
-        val playerWhoJustPlayed = getPlayerById(playerWhoJustPlayedId ?: "")
-        if (playerWhoJustPlayed != null && playerWhoJustPlayed.hand.isEmpty() && playersWithCards.size == 1 && activePlayersStillInGame.size == 2) {
-            val otherPlayer = playersWithCards.first()
-            initiateShootOut(playerWhoJustPlayed.id, otherPlayer.id)
-            return
-        }
-
-        if (playersWithCards.size <= 1 && activePlayersStillInGame.size > 1 && _gameState.value != GameState.SHOOT_OUT_SETUP) {
-             evaluateRound()
-            return
-        }
-
-        val outOfSuitPlayed = _currentPlayedCardsInfo.value.any { it.card.suit != leadSuit && leadSuit != null }
-        val trickSize = _currentPlayedCardsInfo.value.size
-        val expectedPlayersInTrick = activePlayersStillInGame.count { p -> p.hand.isNotEmpty() || _currentPlayedCardsInfo.value.any { pci -> pci.playerId == p.id } }
-
-        if (outOfSuitPlayed || trickSize == expectedPlayersInTrick || playersWithCards.isEmpty()) {
-             evaluateRound()
-        } else {
-            var nextPlayerIndex = (_currentPlayerIndex.value + 1) % _players.value.size
-            var attempts = 0
-            while ((_players.value[nextPlayerIndex].hand.isEmpty() || _players.value[nextPlayerIndex].hasLost) && attempts < _players.value.size) {
-                nextPlayerIndex = (nextPlayerIndex + 1) % _players.value.size
-                attempts++
-            }
-
-            if ((_players.value[nextPlayerIndex].hand.isNotEmpty() && !_players.value[nextPlayerIndex].hasLost) || (attempts == _players.value.size && playersWithCards.isNotEmpty()) ) {
-                 if (_players.value[nextPlayerIndex].hand.isEmpty() && playersWithCards.isNotEmpty() && !_players.value[nextPlayerIndex].hasLost) { // Found a player but they have no cards (shouldn't happen if logic is right)
-                    evaluateRound() // Re-evaluate if we couldn't find a suitable next player with cards
-                    return
-                }
-                _currentPlayerIndex.value = nextPlayerIndex
-                _gameState.value = GameState.PLAYER_TURN
-                _gameMessage.value = "It's ${_players.value[_currentPlayerIndex.value].name}'s turn. Lead suit: ${leadSuit ?: "None"}."
-                autoPlayBotIfNeeded()
-            } else {
-                 evaluateRound()
-            }
-        }
-    }
-
-    private fun evaluateRound() {
-        if (_gameState.value == GameState.SHOOT_OUT_SETUP || _gameState.value == GameState.SHOOT_OUT_DRAWING || _gameState.value == GameState.SHOOT_OUT_RESPONDING) {
-            return
-        }
-        _gameState.value = GameState.EVALUATING_ROUND
-        if (_currentPlayedCardsInfo.value.isEmpty()) {
-            // No cards to evaluate, ensure correct next player or game state
-            checkForBhabhi()
-            if (_gameState.value == GameState.PLAYER_TURN) {
-                val playerWhoShouldLead = _players.value[_currentPlayerIndex.value]
-                if (playerWhoShouldLead.hand.isEmpty() && !playerWhoShouldLead.hasLost) {
-                    _gameMessage.value = "${playerWhoShouldLead.name} has no cards to lead (SR4)."
-                    var nextLeadPlayerIndex = (_currentPlayerIndex.value + 1) % _players.value.size
-                    var attempts = 0
-                    while ((_players.value[nextLeadPlayerIndex].hand.isEmpty() || _players.value[nextLeadPlayerIndex].hasLost) && attempts < _players.value.size) {
-                        nextLeadPlayerIndex = (nextLeadPlayerIndex + 1) % _players.value.size
-                        attempts++
-                    }
-                    if (_players.value[nextLeadPlayerIndex].hand.isNotEmpty() && !_players.value[nextLeadPlayerIndex].hasLost) {
-                        _currentPlayerIndex.value = nextLeadPlayerIndex
-                        _gameMessage.value += " ${_players.value[_currentPlayerIndex.value].name} (to the left) starts."
-                        autoPlayBotIfNeeded()
-                    }
-                } else {
-                    autoPlayBotIfNeeded() // Current leader might be a bot
-                }
-            }
-            return // No cards were played, so nothing to collect or discard
-        }
-
-        val playedCardsInfo = _currentPlayedCardsInfo.value.toList() // Crucial: copy for animation trigger
-        val playedCards = playedCardsInfo.map { it.card }
-        val outOfSuitCardPlayedInfo = playedCardsInfo.firstOrNull { it.card.suit != leadSuit && leadSuit != null }
-
-        var pickerPlayerId: String? = null
-        var pickerPlayerIndex = -1
-
-        if (outOfSuitCardPlayedInfo != null) { // Someone played out of suit
-            if (isFirstRound) { // SR1
-                _gameMessage.value = "SR1: Out of suit in first round (${outOfSuitCardPlayedInfo.card.suit} by ${getPlayerById(outOfSuitCardPlayedInfo.playerId)?.name}). Cards go to discard pile."
-                // Animate cards to discard (conceptually, no specific animation to a pile yet)
-                _cardCollectionAnimationInfo.value = Pair(playedCardsInfo, -1) // -1 for discard pile
-                viewModelScope.launch {
-                    delay(500) // Animation duration
-                    _discardPile.update { it + playedCards }
-                    _currentPlayedCardsInfo.value = emptyList()
-                    _cardCollectionAnimationInfo.value = null
-                    _currentPlayerIndex.value = originalStarterOfFirstRoundIndex
-                    _gameMessage.value = "${_players.value[_currentPlayerIndex.value].name} leads again (SR1)."
-                    isFirstRound = false
-                    leadSuit = null
-                    checkForBhabhi()
-                    if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
-                }
-                return // Rest of logic handled in coroutine
-            } else { // Not first round, someone picks up
-                val highestLeadSuitPlayedInfo = playedCardsInfo.filter { it.card.suit == leadSuit }.maxByOrNull { it.card.rank.value }
-                pickerPlayerId = highestLeadSuitPlayedInfo?.playerId ?: outOfSuitCardPlayedInfo.playerId // Fallback to player who broke suit
-                pickerPlayerIndex = _players.value.indexOfFirst { it.id == pickerPlayerId }
-            }
-        } else { // All followed suit
-            val highestCardInfo = playedCardsInfo.filter { it.card.suit == leadSuit }.maxByOrNull { it.card.rank.value }
-            if (highestCardInfo != null) {
-                val roundWinnerPlayerId = highestCardInfo.playerId
-                _gameMessage.value = "${getPlayerById(roundWinnerPlayerId)?.name} wins the trick with ${highestCardInfo.card.rank} of ${highestCardInfo.card.suit}."
-                // Cards go to discard pile
-                _cardCollectionAnimationInfo.value = Pair(playedCardsInfo, -1) // -1 for discard pile
-                viewModelScope.launch {
-                    delay(500) // Animation duration
-                    _discardPile.update { it + playedCards }
-                    _currentPlayedCardsInfo.value = emptyList()
-                    _cardCollectionAnimationInfo.value = null
-                    _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == roundWinnerPlayerId }
-                    isFirstRound = false // First round ends after first trick
-                    leadSuit = null
-                    checkForBhabhi()
-                    if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
-                }
-                return // Rest of logic handled in coroutine
-            } else {
-                // Error or no cards of lead suit (should not happen if leadSuit is set and cards are played)
-                _gameMessage.value = "Error: No highest card. Discarding pile."
-                _discardPile.update { it + playedCards } // Safety clear
-                _currentPlayedCardsInfo.value = emptyList()
-                // Current player leads again as fallback
-                leadSuit = null
-                checkForBhabhi()
-                if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
+        if (player.isLocal) {
+            Log.d("GameEngine", "Local player ${player.name} (UID: ${player.uid}) attempting to play card: $card")
+            // Basic local validation
+            if (_gameState.value != GameState.PLAYER_TURN) {
+                _gameMessage.value = "Cannot play card now. Game State: ${_gameState.value}"
+                Log.w("GameEngine", "Local playCard: Not player's turn or wrong game state.")
                 return
             }
-        }
-
-        // This part is reached only if a player picks up cards (not SR1, not all-follow-suit-to-discard)
-        if (pickerPlayerId != null && pickerPlayerIndex != -1) {
-            val picker = getPlayerById(pickerPlayerId)!!
-             _gameMessage.value = "${picker.name} picks up the pile." // Message updated after animation
-            _cardCollectionAnimationInfo.value = Pair(playedCardsInfo, pickerPlayerIndex)
-
-            viewModelScope.launch {
-                delay(500) // Animation duration
-
-                val mutablePickerHand = picker.hand.toMutableList()
-                mutablePickerHand.addAll(playedCards.map { it.copy(isPlayed = false) })
-                updatePlayerHand(picker, mutablePickerHand)
-
-                _currentPlayedCardsInfo.value = emptyList()
-                _cardCollectionAnimationInfo.value = null
-                _currentPlayerIndex.value = pickerPlayerIndex
-                isFirstRound = false // If it somehow was still true
-                leadSuit = null
-                checkForBhabhi()
-                if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
+            if (player.uid != _players.value.getOrNull(_currentPlayerIndex.value)?.uid) {
+                 _gameMessage.value = "It's not your turn!"
+                 Log.w("GameEngine", "Local playCard: Not local player's turn by index/UID.")
+                 return
             }
+            if (!player.hand.contains(card)) {
+                _gameMessage.value = "You do not have that card!"
+                Log.w("GameEngine", "Local playCard: Player does not have card $card.")
+                return
+            }
+            // Lead suit validation (optional, server will validate anyway)
+            if (_currentPlayedCardsInfo.value.isNotEmpty() && leadSuit != null && card.suit != leadSuit && player.hand.any { it.suit == leadSuit }) {
+                _gameMessage.value = "You must play the lead suit ($leadSuit) if you have it."
+                Log.w("GameEngine", "Local playCard: Must follow lead suit.")
+                return
+            }
+
+            if (currentRoomId == null) {
+                _gameMessage.value = "Error: Not in a room."
+                Log.e("GameEngine", "playCard: currentRoomId is null.")
+                return
+            }
+            if (firebaseService == null) {
+                _gameMessage.value = "Error: Network service not available."
+                Log.e("GameEngine", "playCard: firebaseService is null.")
+                return
+            }
+
+            _gameMessage.value = "Playing ${card.rank} of ${card.suit}... Waiting for server..."
+            firebaseService?.signalPlayCard(currentRoomId!!, card.toCardNet(),
+                onSuccess = { successMessage ->
+                    _gameMessage.value = successMessage ?: "Card played successfully. Awaiting update."
+                    Log.i("GameEngine", "signalPlayCard success: $successMessage")
+                    _selectedCard.value = null // Deselect card after successful signal
+                },
+                onFailure = { exception ->
+                    _gameMessage.value = "Error playing card: ${exception.message}"
+                    Log.e("GameEngine", "signalPlayCard failure", exception)
+                }
+            )
+
+            // Comment out direct state manipulation:
+            /*
+            if (_currentPlayedCardsInfo.value.isEmpty()) {
+                leadSuit = card.suit
+            }
+            val mutableHand = player.hand.toMutableList()
+            mutableHand.remove(card)
+            updatePlayerHand(player, mutableHand) // This should not happen locally first
+            _currentPlayedCardsInfo.update { it + PlayedCardInfo(card.copy(isPlayed = true), player.id) }
+            determineNextPlayerOrEvaluate() // Server will drive this
+            */
         } else {
-            // Fallback if picker somehow not determined, discard cards to prevent loop
-            _gameMessage.value = "Error: Could not determine card picker. Discarding cards."
-            _discardPile.update { it + playedCards }
-            _currentPlayedCardsInfo.value = emptyList()
-            leadSuit = null
-            checkForBhabhi()
-            if (_gameState.value == GameState.PLAYER_TURN) autoPlayBotIfNeeded()
+            Log.w("GameEngine", "playCard called for remote player ${player.name} (UID: ${player.uid}). This should not happen directly.")
+            // This case should ideally not be triggered if UI is correctly disabled for remote players.
         }
+    }
+
+    // This function becomes mostly obsolete as server drives turns.
+    // Bot logic will also be server-side.
+    /*
+    private fun determineNextPlayerOrEvaluate() {
+        val activePlayersStillInGame = _players.value.filterNot { it.hasLost }
+        // The following logic is now server-driven and reflected via initializeOrUpdateFromNetwork
+    }
+    */
+
+
+    // evaluateRound, proceedToNextTurnOrEndGame, checkForBhabhi, updatePlayerBhabhiStatus, resetGame
+    // are all heavily dependent on local game logic.
+    // They will be significantly simplified or removed as the server dictates game progression and state.
+    // For now, commenting out large portions.
+
+    /*
+    private fun evaluateRound() {
+        // Server will evaluate the round and send updated GameStateData
+        Log.d("GameEngine", "evaluateRound() called - this logic is now server-driven.")
     }
 
     private fun proceedToNextTurnOrEndGame() {
-        // This function is effectively replaced by the logic at the end of the launched coroutines in evaluateRound
-        // and the direct calls to checkForBhabhi and autoPlayBotIfNeeded.
-        // Kept for conceptual reference if needed later.
-        leadSuit = null
-        checkForBhabhi()
-        if (_gameState.value == GameState.PLAYER_TURN) {
-            val leadingPlayer = _players.value[_currentPlayerIndex.value]
-            if (leadingPlayer.hand.isEmpty() && !leadingPlayer.hasLost) {
-                _gameMessage.value += " ${leadingPlayer.name} won/leads but has no cards (SR4)."
-                var nextLeadPlayerIndex = (_currentPlayerIndex.value + 1) % _players.value.size
-                var attempts = 0
-                while ((_players.value[nextLeadPlayerIndex].hand.isEmpty() || _players.value[nextLeadPlayerIndex].hasLost) && attempts < _players.value.size) {
-                    nextLeadPlayerIndex = (nextLeadPlayerIndex + 1) % _players.value.size
-                    attempts++
-                }
-                if (_players.value[nextLeadPlayerIndex].hand.isNotEmpty() && !_players.value[nextLeadPlayerIndex].hasLost) {
-                    _currentPlayerIndex.value = nextLeadPlayerIndex
-                    _gameMessage.value += " ${_players.value[_currentPlayerIndex.value].name} (to the left) starts."
-                }
-            }
-            _gameMessage.value += " It's now ${_players.value.getOrNull(_currentPlayerIndex.value)?.name ?: "N/A"}'s turn."
-            autoPlayBotIfNeeded()
-        }
+        // Server will determine next player and game end conditions
+        Log.d("GameEngine", "proceedToNextTurnOrEndGame() called - this logic is now server-driven.")
     }
 
     private fun checkForBhabhi() {
-        val activePlayers = _players.value.filterNot { it.hasLost }
-        val playersWithCards = activePlayers.filter { it.hand.isNotEmpty() }
-
-        if (activePlayers.size <= 1 && _players.value.size > 1) {
-            if (playersWithCards.size == 1) {
-                val bhabhiPlayer = playersWithCards.first()
-                updatePlayerBhabhiStatus(bhabhiPlayer.id, true)
-                _gameState.value = GameState.GAME_OVER
-                _gameMessage.value = "${bhabhiPlayer.name} is the Bhabhi! Game Over."
-            } else if (playersWithCards.isEmpty()) {
-                _gameMessage.value = "All players have finished their cards! Game Over."
-                _gameState.value = GameState.GAME_OVER
-            }
-        } else if (_gameState.value != GameState.SHOOT_OUT_SETUP && _gameState.value != GameState.SHOOT_OUT_DRAWING && _gameState.value != GameState.SHOOT_OUT_RESPONDING && _gameState.value != GameState.GAME_OVER) {
-            _gameState.value = GameState.PLAYER_TURN
-        }
+        // Server will determine Bhabhi and game over state
+        Log.d("GameEngine", "checkForBhabhi() called - this logic is now server-driven.")
     }
 
     private fun updatePlayerBhabhiStatus(playerId: String, isBhabhi: Boolean) {
-        _players.update { list ->
-            list.map {
-                if (it.id == playerId) it.copy(isBhabhi = isBhabhi, hasLost = isBhabhi)
-                else it
-            }
-        }
+        // This state change will come from the server
+        Log.d("GameEngine", "updatePlayerBhabhiStatus for $playerId called - this logic is now server-driven.")
+    }
+    */
+    fun resetGame() { // This would likely become a call to Firebase to signal intent to restart or leave.
+        Log.i("GameEngine", "resetGame() called. For network play, this would typically involve server interaction.")
+        _gameMessage.value = "Resetting game... (Networked game would require server action)"
+        // For local testing, one might re-initialize to a default local state
+        // _players.value = emptyList()
+        // _currentPlayerIndex.value = 0
+        // _currentPlayedCardsInfo.value = emptyList()
+        // _gameState.value = GameState.INITIALIZING
     }
 
-    fun resetGame() {
-        _gameMessage.value = "Resetting game..."
-        val currentPlayersNames = _players.value.map { it.name } // Preserve names
-        setupGame(currentPlayersNames.ifEmpty { listOf("Player 1", "Player 2", "Player 3") }) // Restart with same or default names
-    }
 
+    // updatePlayerHand is a local helper, might be removed if Player objects are always reconstructed from network state.
+    // If used, it should only reflect server-confirmed changes.
+    /*
     private fun updatePlayerHand(player: Player, newHand: List<Card>) {
         _players.update { list ->
             list.map {
-                if (it.id == player.id) it.copy(hand = newHand.sorted().toMutableList()) else it
+                if (it.uid == player.uid) it.copy(hand = newHand.sorted().toMutableList()) else it
             }
         }
     }
+    */
 
-    private fun getPlayerById(id: String): Player? = _players.value.find { it.id == id }
+    // getPlayerById should now use UID
+    private fun getPlayerByUid(uid: String): Player? = _players.value.find { it.uid == uid }
 
     fun attemptTakeHandFromLeft(playerIndex: Int) {
+        val player = _players.value.getOrNull(playerIndex)
+        if (player == null || !player.isLocal) {
+            Log.w("GameEngine", "attemptTakeHandFromLeft: Invalid action for non-local or null player.")
+            _gameMessage.value = "Invalid action."
+            return
+        }
+
+        if (currentRoomId == null) {
+            _gameMessage.value = "Error: Not in a room."
+            Log.e("GameEngine", "attemptTakeHandFromLeft: currentRoomId is null.")
+            return
+        }
+        if (firebaseService == null) {
+            _gameMessage.value = "Error: Network service not available."
+            Log.e("GameEngine", "attemptTakeHandFromLeft: firebaseService is null.")
+            return
+        }
+
+        _gameMessage.value = "Attempting to take hand from left... (Waiting for server)"
+        firebaseService?.signalTakeHandFromLeft(currentRoomId!!, player.uid,
+            onSuccess = { successMessage ->
+                _gameMessage.value = successMessage ?: "Take hand action sent. Awaiting update."
+                Log.i("GameEngine", "signalTakeHandFromLeft success: $successMessage")
+            },
+            onFailure = { exception ->
+                _gameMessage.value = "Error taking hand: ${exception.message}"
+                Log.e("GameEngine", "signalTakeHandFromLeft failure", exception)
+            }
+        )
+        // Comment out direct state manipulation:
+        /*
         if (_gameState.value == GameState.EVALUATING_ROUND || !_currentPlayedCardsInfo.value.isEmpty()) {
             _gameMessage.value = "SR2: Cannot take hand mid-trick. Wait for trick to finish."
             return
         }
-        if (playerIndex < 0 || playerIndex >= _players.value.size) {
-            _gameMessage.value = "SR2: Invalid player index."
-            return
-        }
-        val takingPlayer = _players.value[playerIndex]
-        if (takingPlayer.hasLost) {
-            _gameMessage.value = "SR2: ${takingPlayer.name} is already out of the game."
-            return
-        }
-        var leftPlayerIndex = if (playerIndex == 0) _players.value.size - 1 else playerIndex - 1
-        var attempts = 0
-        while(_players.value[leftPlayerIndex].hasLost && attempts < _players.value.size) {
-            leftPlayerIndex = if (leftPlayerIndex == 0) _players.value.size - 1 else leftPlayerIndex - 1
-            attempts++
-        }
-        val leftPlayer = _players.value[leftPlayerIndex]
-        if (leftPlayer.hasLost || leftPlayer.id == takingPlayer.id || leftPlayer.hand.isEmpty()) { // Cannot take empty hand
-            _gameMessage.value = "SR2: No valid player to the left with cards to take hand from."
-            return
-        }
-        _gameMessage.value = "SR2: ${takingPlayer.name} attempts to take hand from ${leftPlayer.name}."
-        val combinedHand = (takingPlayer.hand + leftPlayer.hand).sorted().toMutableList()
-        val leftPlayerOriginalHandSize = leftPlayer.hand.size
-        _players.update { list ->
-            list.map {
-                when (it.id) {
-                    takingPlayer.id -> it.copy(hand = combinedHand)
-                    leftPlayer.id -> it.copy(hand = mutableListOf(), hasLost = true) 
-                    else -> it
-                }
-            }
-        }
+        // ... rest of the original validation and logic ...
+        _players.update { list -> ... }
         _gameMessage.value = "${takingPlayer.name} took ${leftPlayerOriginalHandSize} cards from ${leftPlayer.name}. ${leftPlayer.name} is out of the game!"
-        _currentPlayerIndex.value = playerIndex // Taker is current player
+        _currentPlayerIndex.value = playerIndex
         checkForBhabhi()
         if (_gameState.value != GameState.GAME_OVER) {
             _gameState.value = GameState.PLAYER_TURN
-            autoPlayBotIfNeeded()
+            // autoPlayBotIfNeeded() // Bot logic is server-side
         }
+        */
     }
 
-    // --- Bot AI Logic ---
-    private fun findPlayForBot(botPlayer: Player): Card? {
-        if (botPlayer.hand.isEmpty()) return null
+    // Bot AI Logic (findPlayForBot, autoPlayBotIfNeeded) will be server-side.
+    // Client GameEngine should not contain bot decision-making for network play.
+    /*
+    private fun findPlayForBot(botPlayer: Player): Card? { ... }
+    private fun autoPlayBotIfNeeded() { ... }
+    */
 
-        // Rule: Must play Ace of Spades if it's the first card of the game, bot has it, and is the designated starter.
-        if (isFirstRound && _currentPlayedCardsInfo.value.isEmpty() &&
-            _players.value.getOrNull(originalStarterOfFirstRoundIndex)?.id == botPlayer.id ) {
-            val aceOfSpades = botPlayer.hand.find { it.rank == Rank.ACE && it.suit == Suit.SPADES }
-            if (aceOfSpades != null) return aceOfSpades
-        }
+    // Shoot-Out (SR4B) Implementation
+    // These actions will also be initiated by local player and sent to server.
+    // Server will manage shoot-out state and outcomes.
 
-        if (leadSuit == null) { // Bot is leading the trick
-            // Play the lowest rank card. If multiple, prefer lower suit ordinal (less "valuable" suit).
-            return botPlayer.hand.minWithOrNull(compareBy({ it.rank.value }, { it.suit.ordinal }))
-        } else {
-            // Try to follow suit
-            val cardsInSuit = botPlayer.hand.filter { it.suit == leadSuit }
-            if (cardsInSuit.isNotEmpty()) {
-                // Play the lowest card of the lead suit.
-                return cardsInSuit.minByOrNull { it.rank.value }
-            } else {
-                // Cannot follow suit, play a high-value card of a different suit (to get rid of it)
-                // Prefer highest rank, then suit with most cards in hand (to break it if possible), then highest suit ordinal.
-                return botPlayer.hand.maxWithOrNull(compareBy({ it.rank.value }, { botPlayer.hand.count { c -> c.suit == it.suit} }, {it.suit.ordinal}))
-            }
-        }
-    }
-
-    private fun autoPlayBotIfNeeded() {
-        if (!(_gameState.value == GameState.PLAYER_TURN ||
-              _gameState.value == GameState.SHOOT_OUT_DRAWING ||
-              _gameState.value == GameState.SHOOT_OUT_RESPONDING)) {
-            return
-        }
-
-        val currentPlayer = _players.value.getOrNull(_currentPlayerIndex.value)
-        if (currentPlayer != null && currentPlayer.isBot && !currentPlayer.hasLost) {
-            viewModelScope.launch {
-                delay(1000) // UX delay
-
-                val stillCurrentPlayer = _players.value.getOrNull(_currentPlayerIndex.value)
-                if (stillCurrentPlayer?.id != currentPlayer.id || stillCurrentPlayer.hasLost || _gameState.value == GameState.GAME_OVER) {
-                    return@launch // State changed, or player changed, or game ended during delay
-                }
-                
-                _gameMessage.value = "${currentPlayer.name} (Bot) is thinking..."
-                delay(500) // Thinking delay
-
-                // Re-check state before playing, as it might have changed during the thinking delay
-                 if (stillCurrentPlayer.id != _players.value.getOrNull(_currentPlayerIndex.value)?.id || _gameState.value == GameState.GAME_OVER) return@launch
-
-
-                when (_gameState.value) {
-                    GameState.PLAYER_TURN -> {
-                        val cardToPlay = findPlayForBot(currentPlayer)
-                        if (cardToPlay != null) {
-                            playCard(_currentPlayerIndex.value, cardToPlay)
-                        } else if (currentPlayer.hand.isNotEmpty()) {
-                            _gameMessage.value = "Error: Bot ${currentPlayer.name} could not find a card to play."
-                        }
-                    }
-                    GameState.SHOOT_OUT_DRAWING -> {
-                        if (currentPlayer.id == shootOutDrawingPlayerId) {
-                            shootOutDrawCard(currentPlayer.id)
-                        }
-                    }
-                    GameState.SHOOT_OUT_RESPONDING -> {
-                        if (currentPlayer.id == shootOutRespondingPlayerId) {
-                            val drawnCard = shootOutDrawnCard ?: return@launch
-                            var cardToPlayByBot: Card? = null
-                            cardToPlayByBot = currentPlayer.hand.filter { it.rank.value > drawnCard.rank.value }
-                                .minByOrNull { it.rank.value }
-                            if (cardToPlayByBot == null) {
-                                cardToPlayByBot = currentPlayer.hand.minByOrNull { it.rank.value }
-                            }
-                            if (cardToPlayByBot != null) {
-                                shootOutRespond(currentPlayer.id, cardToPlayByBot)
-                            } else if (currentPlayer.hand.isNotEmpty()) {
-                                _gameMessage.value = "Error: Bot ${currentPlayer.name} has no cards to respond in Shoot-Out but hand not empty."
-                            }
-                        }
-                    }
-                    else -> { /* Do nothing */ }
-                }
-            }
-        }
-    }
-
-    // --- Shoot-Out (SR4B) Implementation ---
+    /*
     private fun initiateShootOut(playerAId: String, playerBId: String) {
-        shootOutDrawingPlayerId = playerAId
-        shootOutRespondingPlayerId = playerBId
-        _gameState.value = GameState.SHOOT_OUT_SETUP
-        _gameMessage.value = "SR4B: Shoot-Out! ${getPlayerById(playerAId)?.name} vs ${getPlayerById(playerBId)?.name}. ${getPlayerById(playerAId)?.name} to draw."
-        _currentPlayerIndex.value = _players.value.indexOfFirst{it.id == playerAId}
-        _gameState.value = GameState.SHOOT_OUT_DRAWING
-        autoPlayBotIfNeeded()
+         Log.d("GameEngine", "initiateShootOut() called - this logic is now server-driven.")
     }
+    */
 
-    fun shootOutDrawCard(drawingPlayerId: String) {
-        if (drawingPlayerId != shootOutDrawingPlayerId || _gameState.value != GameState.SHOOT_OUT_DRAWING) {
-            _gameMessage.value = "SR4B Error: Not your turn or wrong state to draw for shootout."
-            return
-        }
-        if (_discardPile.value.size < 3) {
-            _gameMessage.value = "SR4B: Not enough cards in discard pile for Shoot-Out! Game ends."
-            updatePlayerBhabhiStatus(drawingPlayerId, true)
-            _gameState.value = GameState.GAME_OVER
+    fun shootOutDrawCard(playerIndex: Int) { // Changed parameter to playerIndex for consistency
+        val player = _players.value.getOrNull(playerIndex)
+        if (player == null || !player.isLocal || _gameState.value != GameState.SHOOT_OUT_DRAWING || player.uid != _shootOutDrawingPlayerId) {
+            Log.w("GameEngine", "shootOutDrawCard: Invalid action. Player: ${player?.uid}, Local: ${player?.isLocal}, State: ${_gameState.value}, DrawingID: ${_shootOutDrawingPlayerId}")
+            _gameMessage.value = "Cannot draw card for shootout now."
             return
         }
 
-        val drawingPlayer = getPlayerById(drawingPlayerId)!!
-        val mutableDiscard = _discardPile.value.toMutableList()
-        val drawableCards = mutableDiscard.dropLast(2)
-        if (drawableCards.isEmpty()) {
-             _gameMessage.value = "SR4B: No drawable cards for Shoot-Out! Game ends."
-             updatePlayerBhabhiStatus(drawingPlayerId, true)
-            _gameState.value = GameState.GAME_OVER
+        if (currentRoomId == null) {
+            _gameMessage.value = "Error: Not in a room."
+            Log.e("GameEngine", "shootOutDrawCard: currentRoomId is null.")
+            return
+        }
+        if (firebaseService == null) {
+            _gameMessage.value = "Error: Network service not available."
+            Log.e("GameEngine", "shootOutDrawCard: firebaseService is null.")
             return
         }
 
-        val randomIndex = Random.nextInt(drawableCards.size)
-        shootOutDrawnCard = drawableCards[randomIndex]
-        mutableDiscard.remove(shootOutDrawnCard)
-        _discardPile.value = mutableDiscard
-
+        _gameMessage.value = "Drawing card for Shoot-Out... (Waiting for server)"
+        firebaseService?.signalShootOutDraw(currentRoomId!!, player.uid,
+            onSuccess = { successMessage ->
+                _gameMessage.value = successMessage ?: "Shoot-Out draw action sent. Awaiting update."
+                Log.i("GameEngine", "signalShootOutDraw success: $successMessage")
+            },
+            onFailure = { exception ->
+                _gameMessage.value = "Error drawing for Shoot-Out: ${exception.message}"
+                Log.e("GameEngine", "signalShootOutDraw failure", exception)
+            }
+        )
+        // Comment out direct state manipulation:
+        /*
+        // ... original logic ...
         updatePlayerHand(drawingPlayer, (drawingPlayer.hand + shootOutDrawnCard!!).toMutableList())
         _gameMessage.value = "${drawingPlayer.name} drew ${shootOutDrawnCard!!.rank} of ${shootOutDrawnCard!!.suit}. ${getPlayerById(shootOutRespondingPlayerId!!)?.name} to respond."
         _gameState.value = GameState.SHOOT_OUT_RESPONDING
         _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == shootOutRespondingPlayerId }
-        autoPlayBotIfNeeded()
+        // autoPlayBotIfNeeded() // Server side
+        */
     }
 
-    fun shootOutRespond(respondingPlayerId: String, cardToPlay: Card) {
-        if (respondingPlayerId != shootOutRespondingPlayerId || _gameState.value != GameState.SHOOT_OUT_RESPONDING || shootOutDrawnCard == null) {
-            _gameMessage.value = "SR4B Error: Not your turn or wrong state to respond for shootout."
+    fun shootOutRespond(playerIndex: Int, card: Card) { // Changed parameter to playerIndex for consistency
+        val player = _players.value.getOrNull(playerIndex)
+         if (player == null || !player.isLocal || _gameState.value != GameState.SHOOT_OUT_RESPONDING || player.uid != _shootOutRespondingPlayerId) {
+            Log.w("GameEngine", "shootOutRespond: Invalid action. Player: ${player?.uid}, Local: ${player?.isLocal}, State: ${_gameState.value}, RespondingID: ${_shootOutRespondingPlayerId}")
+            _gameMessage.value = "Cannot respond to Shoot-Out now."
             return
         }
-        val respondingPlayer = getPlayerById(respondingPlayerId)!!
-        if (!respondingPlayer.hand.contains(cardToPlay)) {
-            _gameMessage.value = "SR4B: You don't have that card!"
+        if (!player.hand.contains(card)) {
+            _gameMessage.value = "You do not have that card for Shoot-Out!"
             return
         }
 
-        _gameMessage.value = "${respondingPlayer.name} responds with ${cardToPlay.rank} of ${cardToPlay.suit} against ${shootOutDrawnCard!!.rank} of ${shootOutDrawnCard!!.suit}."
-        val mutableResponderHand = respondingPlayer.hand.toMutableList()
-        mutableResponderHand.remove(cardToPlay)
+        if (currentRoomId == null) {
+            _gameMessage.value = "Error: Not in a room."
+            Log.e("GameEngine", "shootOutRespond: currentRoomId is null.")
+            return
+        }
+        if (firebaseService == null) {
+            _gameMessage.value = "Error: Network service not available."
+            Log.e("GameEngine", "shootOutRespond: firebaseService is null.")
+            return
+        }
+
+        _gameMessage.value = "Responding to Shoot-Out with ${card.rank} of ${card.suit}... (Waiting for server)"
+        firebaseService?.signalShootOutRespond(currentRoomId!!, player.uid, card.toCardNet(),
+            onSuccess = { successMessage ->
+                _gameMessage.value = successMessage ?: "Shoot-Out response sent. Awaiting update."
+                Log.i("GameEngine", "signalShootOutRespond success: $successMessage")
+            },
+            onFailure = { exception ->
+                _gameMessage.value = "Error responding to Shoot-Out: ${exception.message}"
+                Log.e("GameEngine", "signalShootOutRespond failure", exception)
+                // Do not deselect card on failure, user might want to retry or select a different card.
+            }
+        )
+        // Comment out direct state manipulation:
+        /*
+        // ... original logic ...
         updatePlayerHand(respondingPlayer, mutableResponderHand)
-        val shootOutPile = mutableListOf(shootOutDrawnCard!!, cardToPlay)
-
-        var winnerId: String? = null
-        var loserId: String? = null
-
-        if (cardToPlay.rank.value > shootOutDrawnCard!!.rank.value) {
-            winnerId = respondingPlayerId; loserId = shootOutDrawingPlayerId
-            _gameMessage.value += " ${respondingPlayer.name} wins the Shoot-Out round!"
-        } else if (cardToPlay.rank.value < shootOutDrawnCard!!.rank.value) {
-            winnerId = shootOutDrawingPlayerId; loserId = respondingPlayerId
-            _gameMessage.value += " ${getPlayerById(shootOutDrawingPlayerId!!)?.name} wins the Shoot-Out round!"
-        } else {
-            _discardPile.update { it + shootOutPile }
-            _gameMessage.value += " Same rank! Re-Shoot! Cards added to discard. ${getPlayerById(shootOutDrawingPlayerId!!)?.name} draws again."
-            shootOutDrawnCard = null
-            _gameState.value = GameState.SHOOT_OUT_DRAWING
-            _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == shootOutDrawingPlayerId }
-            autoPlayBotIfNeeded()
-            return
-        }
-        
-        val loserPlayer = getPlayerById(loserId!!)!!
-        val winnerPlayer = getPlayerById(winnerId!!)!!
-        val mutableLoserHand = loserPlayer.hand.toMutableList()
-        mutableLoserHand.addAll(shootOutPile.map { it.copy(isPlayed = false) })
-        updatePlayerHand(loserPlayer, mutableLoserHand)
-        _gameMessage.value += " ${loserPlayer.name} picks up ${shootOutPile.size} cards."
-
-        shootOutDrawnCard = null; shootOutDrawingPlayerId = null; shootOutRespondingPlayerId = null
-
-        if (winnerPlayer.hand.isEmpty()) {
-            _gameMessage.value += " ${winnerPlayer.name} has finished all cards!"
-            updatePlayerBhabhiStatus(loserPlayer.id, true)
-            _gameState.value = GameState.GAME_OVER
-        } else if (loserPlayer.hand.isEmpty() && winnerPlayer.hand.isNotEmpty()) {
-            updatePlayerBhabhiStatus(winnerPlayer.id, true)
-            _gameState.value = GameState.GAME_OVER
-        } else {
-            _currentPlayerIndex.value = _players.value.indexOfFirst { it.id == winnerId }
-            _gameState.value = GameState.PLAYER_TURN
-            _gameMessage.value += " It's ${getPlayerById(winnerId)?.name}'s turn."
-            autoPlayBotIfNeeded()
-        }
+        // ... more state changes ...
         checkForBhabhi()
+        */
     }
 }

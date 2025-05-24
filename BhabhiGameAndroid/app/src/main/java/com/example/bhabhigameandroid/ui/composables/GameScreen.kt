@@ -19,13 +19,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.bhabhigameandroid.Card
-import com.example.bhabhigameandroid.GameEngine
-import com.example.bhabhigameandroid.GameState
+// import com.example.bhabhigameandroid.GameEngine // GameEngine directly is no longer used
+import com.example.bhabhigameandroid.Player // Domain Player
+import com.example.bhabhigameandroid.GameState as BhabhiGameState // Alias for enum
 import com.example.bhabhigameandroid.PlayedCardInfo
-import com.example.bhabhigameandroid.Player
-import androidx.lifecycle.viewmodel.compose.viewModel // For viewModel()
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.border
+import com.example.bhabhigameandroid.ui.viewmodels.GameViewModel
+import com.example.bhabhigameandroid.ui.viewmodels.GameViewModelFactory
 import androidx.compose.foundation.shape.RoundedCornerShape // Ensure RoundedCornerShape is imported
 import androidx.compose.animation.core.* // For rememberInfiniteTransition, animateFloat, etc.
 import androidx.compose.ui.draw.scale // For Modifier.scale()
@@ -117,33 +119,43 @@ fun PlayingCardView(
     }
 }
 
+import com.example.bhabhigameandroid.ui.theme.BhabhiGameAndroidTheme // Assuming this exists
+
 // Helper to get player by ID, to be used carefully as gameEngine might not be available here directly
 // Or pass players list as a parameter.
-fun getPlayerById(gameEngine: GameEngine?, playerId: String, playersState: List<Player>?): Player? {
-    return playersState?.find { it.id == playerId } ?: gameEngine?.players?.value?.find { it.id == playerId }
+// This helper might need to be adapted or removed if GameEngine instance is not available.
+// For PlayingCardView, player name can be fetched from GameViewModel's players list using playerId.
+fun getPlayerNameById(playerId: String, playersList: List<Player>): String {
+    return playersList.find { it.uid == playerId }?.name ?: "P?"
 }
 
 
 @Composable
 fun PlayerHandView(
     player: Player,
-    playerIndex: Int, // Added playerIndex for avatar color
+    playerIndex: Int, // For avatar color
     isCurrentPlayer: Boolean,
-    gameState: GameState,
-    canPlay: Boolean, // Derived from isCurrentPlayer and gameState
-    selectedCard: Card?,
-    onCardSelected: (Card) -> Unit
+    isLocalPlayer: Boolean,
+    currentGameState: BhabhiGameState,
+    selectedCardUi: Card?,
+    onCardSelected: (Card) -> Unit,
+    localPlayerId: String? // Pass localPlayerId to determine if this hand's interactions are enabled
 ) {
+    val canPlay = isCurrentPlayer && player.uid == localPlayerId && !player.hasLost &&
+                  (currentGameState == BhabhiGameState.PLAYER_TURN ||
+                   (currentGameState == BhabhiGameState.SHOOT_OUT_RESPONDING && player.uid == localPlayerId))
+
+
     Column(
         modifier = Modifier
             .padding(vertical = 4.dp, horizontal = 2.dp)
-            .background(if (isCurrentPlayer && gameState != GameState.GAME_OVER && !player.hasLost) Color(0xFF008080).copy(alpha = 0.1f) else Color.Transparent) // Updated background
+            .background(if (isCurrentPlayer && currentGameState != BhabhiGameState.GAME_OVER && !player.hasLost) Color(0xFF008080).copy(alpha = 0.1f) else Color.Transparent)
             .padding(4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            val isMyTurnAndCanPlay = isCurrentPlayer && gameState == GameState.PLAYER_TURN && !player.hasLost
+            val isMyTurnAndCanPlay = isCurrentPlayer && currentGameState == BhabhiGameState.PLAYER_TURN && !player.hasLost && isLocalPlayer
 
-            val avatarScale = if (isMyTurnAndCanPlay) {
+            val avatarScale = if (isMyTurnAndCanPlay) { // Pulsing for local player's turn
                 val infiniteTransition = rememberInfiniteTransition(label = "avatarPulsingScale")
                 infiniteTransition.animateFloat(
                     initialValue = 1f,
@@ -165,27 +177,27 @@ fun PlayerHandView(
                         color = playerColor(playerIndex), // Unchanged
                         shape = CircleShape
                     )
-                    .border(1.dp, Color(0xFF333333).copy(alpha = 0.5f), CircleShape) // Updated border color
+                    .border(1.dp, Color(0xFF333333).copy(alpha = 0.5f), CircleShape)
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = "${player.name} (${player.hand.size}) ${if (player.isBhabhi) " - BHABHI" else if (player.hasLost) " - LOST" else ""}",
-                fontWeight = if (player.isBhabhi) FontWeight.Bold else if (isCurrentPlayer && !player.hasLost) FontWeight.Bold else FontWeight.Normal, // BHABHI is always bold
-                color = if (player.isBhabhi) Color(0xFFD32F2F) // Red for BHABHI
-                        else if (player.hasLost) Color(0xFF757575) // Muted Gray for LOST
-                        else Color(0xFF333333), // Dark Gray/Off-Black for Player Name
+                fontWeight = if (player.isBhabhi) FontWeight.Bold else if (isCurrentPlayer && !player.hasLost) FontWeight.Bold else FontWeight.Normal,
+                color = if (player.isBhabhi) Color(0xFFD32F2F)
+                        else if (player.hasLost) Color(0xFF757575)
+                        else Color(0xFF333333),
                 style = MaterialTheme.typography.subtitle1
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         LazyRow(
-            modifier = Modifier.fillMaxWidth().padding(start = 32.dp), // Indent cards to align under text
+            modifier = Modifier.fillMaxWidth().padding(start = 32.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            items(player.hand.sorted()) { card -> // Keep hand sorted for consistent display
+            items(player.hand.sorted()) { card ->
                 PlayingCardView(
                     card = card,
-                    isSelected = selectedCard == card && isCurrentPlayer,
+                    isSelected = selectedCardUi == card && player.uid == localPlayerId, // Highlight only if it's the local player's selected card
                     isClickable = canPlay,
                     onCardClick = { if (canPlay) onCardSelected(card) }
                 )
@@ -196,76 +208,118 @@ fun PlayerHandView(
 
 @Composable
 fun GameScreen(
-    navController: androidx.navigation.NavController, // Added for potential navigation from GameScreen
-    gameEngine: GameEngine = viewModel() // GameScreen now gets its own GameEngine instance
+    navController: NavController,
+    roomId: String
 ) {
-    val players by gameEngine.players.collectAsState()
-    val currentPlayerIndex by gameEngine.currentPlayerIndex.collectAsState()
-    val currentPlayedCardsInfo by gameEngine.currentPlayedCardsInfo.collectAsState()
-    val gameState by gameEngine.gameState.collectAsState()
-    val gameMessage by gameEngine.gameMessage.collectAsState()
+    val gameViewModel: GameViewModel = viewModel(factory = GameViewModelFactory(roomId))
 
-    var selectedCard by remember { mutableStateOf<Card?>(null) }
-    // For player name input in INITIALIZING state
-    val playerNamesState = remember { mutableStateListOf("You", "Bot Alice", "Bot Bob") } // Default for "Play vs Bots"
+    val players by gameViewModel.players.collectAsState()
+    val currentPlayerIndex by gameViewModel.currentPlayerIndex.collectAsState()
+    val currentPlayedCardsInfo by gameViewModel.currentPlayedCardsInfo.collectAsState()
+    val gameState by gameViewModel.gameState.collectAsState()
+    val gameMessage by gameViewModel.gameMessage.collectAsState()
+    val selectedCard by gameViewModel.selectedCard.collectAsState() // This is gameViewModel.gameEngine.selectedCard
+    val localPlayerId = gameViewModel.localPlayerId
+    val error by gameViewModel.error.collectAsState()
+    // val roomDetails by lazy {players.isNotEmpty()} // This placeholder is no longer needed for GameTableComposable
+    val isConnected by gameViewModel.isConnected.collectAsState()
+    val isActionPending by gameViewModel.isActionPending.collectAsState()
 
-    // Setup game when screen is first composed after navigation
-    LaunchedEffect(Unit) {
-        if (players.isEmpty() || gameState == GameState.INITIALIZING) { // Only setup if not already set up (e.g. after config change)
-            gameEngine.setupGame(playerNamesState.toList())
-        }
-    }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(8.dp)
-            .verticalScroll(rememberScrollState()), // Make screen scrollable for smaller devices
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // Game Message Area
-        Text(
-            text = gameMessage,
-            modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth(),
-            style = MaterialTheme.typography.subtitle1,
-            color = if (gameMessage.contains("Error", ignoreCase = true) || gameMessage.contains("Bhabhi", ignoreCase = true)) Color(0xFFD32F2F) else Color(0xFF333333)
-        )
-        Spacer(modifier = Modifier.height(8.dp))
+    // Shoot-out specific states from ViewModel
+    val shootOutDrawingPlayerId by gameViewModel.shootOutDrawingPlayerId.collectAsState()
+    val shootOutRespondingPlayerId by gameViewModel.shootOutRespondingPlayerId.collectAsState()
 
-        // Game Table Area - Takes available space between message and buttons
-        Box(modifier = Modifier.weight(1f)) {
-            if (players.isNotEmpty() && gameState != GameState.INITIALIZING && gameState != GameState.DEALING) {
-                GameTable(
-                    gameEngine = gameEngine,
-                    selectedCard = selectedCard,
-                    onCardSelected = { card -> selectedCard = card }
-                )
-            } else if (gameState == GameState.INITIALIZING || gameState == GameState.DEALING) {
-                // Show a simple loading or dealing state on the table area
-                Box(modifier = Modifier.fillMaxSize().background(Color(0xFF006400)), contentAlignment = Alignment.Center) {
-                    Text(if(gameState == GameState.INITIALIZING) "Waiting for game to start..." else "Dealing cards...", style = MaterialTheme.typography.h6, color = Color.White)
+    BhabhiGameAndroidTheme { // Apply the theme
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color(0xFFFAF8F0) // Theme background for the screen
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp)
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (!isConnected) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Red.copy(alpha = 0.8f))
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Disconnected. Attempting to reconnect...",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
-            }
-        }
-        // Spacer(modifier = Modifier.weight(1f)) // Removed, GameTable now fills space
+                Text(
+                    text = gameMessage,
+                    modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth(),
+                    style = MaterialTheme.typography.subtitle1,
+                    color = if (gameMessage.contains("Error", ignoreCase = true) || gameMessage.contains("Bhabhi", ignoreCase = true)) Color(0xFFD32F2F) else Color(0xFF333333)
+                )
+                error?.let {
+                    Text(
+                        text = "Error: $it",
+                        color = Color.Red,
+                        modifier = Modifier.padding(vertical = 4.dp).fillMaxWidth()
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
 
-        // Action Buttons
-        if (gameState != GameState.INITIALIZING && gameState != GameState.DEALING) { // Keep buttons hidden during init/deal
-            val currentPlayer = players.getOrNull(currentPlayerIndex)
-
-            if (gameState == GameState.PLAYER_TURN && currentPlayer != null && !currentPlayer.hasLost) {
-                Button(
-                    onClick = {
-                        selectedCard?.let {
-                            gameEngine.playCard(currentPlayerIndex, it)
-                            selectedCard = null // Deselect after playing
+                Box(modifier = Modifier.weight(1f)) {
+                    if (players.isEmpty() && gameState == BhabhiGameState.INITIALIZING && error == null) {
+                        CircularProgressIndicator(color = Color(0xFF008080))
+                    } else if (players.isNotEmpty() && gameState !in listOf(BhabhiGameState.INITIALIZING, BhabhiGameState.WAITING, BhabhiGameState.DEALING)) {
+                        GameTableComposable(
+                            players = players,
+                            currentPlayerIndex = currentPlayerIndex,
+                            currentPlayedCardsInfo = currentPlayedCardsInfo,
+                            onCardSelected = { card -> gameViewModel.onCardSelected(card) },
+                            selectedCardUi = selectedCard,
+                            localPlayerId = localPlayerId,
+                            currentGameState = gameState,
+                            getPlayerNameById = { pId -> getPlayerNameById(pId, players) }
+                        )
+                    } else { // Covers INITIALIZING (if players not empty but still in init), WAITING, DEALING
+                        Box(modifier = Modifier.fillMaxSize().background(Color(0xFF3A6B35)), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = when (gameState) {
+                                        BhabhiGameState.INITIALIZING -> "Initializing Game..."
+                                        BhabhiGameState.WAITING -> "Waiting for more players..."
+                                        BhabhiGameState.DEALING -> "Dealing cards..."
+                                        else -> "Loading game..."
+                                    },
+                                    style = MaterialTheme.typography.h6,
+                                    color = Color.White
+                                )
+                                if (gameState == BhabhiGameState.INITIALIZING || gameState == BhabhiGameState.WAITING) {
+                                    CircularProgressIndicator(color = Color.White, modifier = Modifier.padding(top = 8.dp))
+                                }
+                            }
                         }
-                    },
-                    enabled = selectedCard != null,
+                    }
+                }
+
+                // Action Buttons
+                val currentPlayerObject = players.getOrNull(currentPlayerIndex)
+                val isLocalPlayerTurn = currentPlayerObject?.uid == localPlayerId && currentPlayerObject?.hasLost == false
+
+                if (gameState == BhabhiGameState.PLAYER_TURN && isLocalPlayerTurn) {
+                    Button(
+                        onClick = { gameViewModel.onPlayCardAction() },
+                        enabled = selectedCard != null && !isActionPending && isConnected,
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
                         backgroundColor = Color(0xFF008080),
-                        contentColor = Color(0xFFFFFFFF),
+                        contentColor = Color.White,
                         disabledBackgroundColor = Color(0xFFD3D3D3),
                         disabledContentColor = Color(0xFFA9A9A9)
                     ),
@@ -273,14 +327,13 @@ fun GameScreen(
                 ) {
                     Text("Play Selected Card", fontWeight = FontWeight.SemiBold)
                 }
-                // SR2 Button
                 Button(
-                    onClick = { gameEngine.attemptTakeHandFromLeft(currentPlayerIndex) },
-                    enabled = currentPlayedCardsInfo.isEmpty(), // Can only take if trick pile is empty
+                    onClick = { gameViewModel.onTakeHandFromLeftAction() },
+                    enabled = currentPlayedCardsInfo.isEmpty() && localPlayerCanPlay,
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
                         backgroundColor = Color(0xFF008080),
-                        contentColor = Color(0xFFFFFFFF),
+                        contentColor = Color.White,
                         disabledBackgroundColor = Color(0xFFD3D3D3),
                         disabledContentColor = Color(0xFFA9A9A9)
                     ),
@@ -290,26 +343,18 @@ fun GameScreen(
                 }
             }
 
-            // Shoot-Out Buttons
-            if (gameState == GameState.SHOOT_OUT_DRAWING && currentPlayer?.id == gameEngine.shootOutDrawingPlayerId) {
+            if (gameState == BhabhiGameState.SHOOT_OUT_DRAWING && shootOutDrawingPlayerId == localPlayerId && localPlayerCanPlay) {
                 Button(
-                    onClick = { gameEngine.shootOutDrawCard(currentPlayer.id) },
+                    onClick = { gameViewModel.onShootOutDrawAction() },
+                    enabled = localPlayerCanPlay, // Redundant if already checked but good for clarity
                     shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        backgroundColor = Color(0xFF008080),
-                        contentColor = Color(0xFFFFFFFF)
-                    ),
+                    colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF008080), contentColor = Color.White),
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) { Text("SR4B: Draw Card for Shoot-Out", fontWeight = FontWeight.SemiBold) }
             }
-            if (gameState == GameState.SHOOT_OUT_RESPONDING && currentPlayer?.id == gameEngine.shootOutRespondingPlayerId) {
+            if (gameState == BhabhiGameState.SHOOT_OUT_RESPONDING && shootOutRespondingPlayerId == localPlayerId) {
                  Button(
-                    onClick = {
-                        selectedCard?.let {
-                            gameEngine.shootOutRespond(currentPlayer.id, it)
-                            selectedCard = null
-                        }
-                    },
+                    onClick = { gameViewModel.onShootOutRespondAction() },
                     enabled = selectedCard != null,
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
@@ -322,13 +367,12 @@ fun GameScreen(
                 ) { Text("SR4B: Respond with Selected Card", fontWeight = FontWeight.SemiBold) }
             }
 
-
-            if (gameState == GameState.GAME_OVER || players.all{it.hasLost || it.isBhabhi}) {
+            if (gameState == BhabhiGameState.GAME_OVER) {
+                // Check if local player is host for restart capability
+                // val amIHost = players.find { it.uid == localPlayerId }?.isHost ?: false
+                // if (amIHost) { // For now, allow anyone to trigger restart signal
                 Button(
-                    onClick = {
-                        selectedCard = null
-                        gameEngine.setupGame(playerNamesState.toList()) // Restart with same default names
-                    },
+                    onClick = { gameViewModel.onRestartGameAction() },
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
                         backgroundColor = Color(0xFF008080),
